@@ -1,0 +1,587 @@
+#!/usr/bin/python3
+
+import re, sys, statistics , os
+
+class Noise:
+	def __init__(self, ts):
+		self.start = ts
+		self.end = None
+
+	def complete(self, end):
+		self.end = end
+
+	def duration(self):
+		if self.end is None:
+			return None
+		else:
+			return self.end - self.start
+
+	def match_exit(self, ne):
+		return False
+
+	def histable(self):
+		return True
+
+class IrqWorkNoise(Noise):
+	def create_hist(self):
+		return IrqWorkHist(self)
+
+class LocalTimerNoise(Noise):
+	def create_hist(self):
+		return LocalTimerHist(self)
+
+class PageFaultNoise(Noise):
+	def create_hist(self):
+		return PageFaultHist(self)
+
+class SchedNoise(Noise):
+	def __init__(self, next_task, ts):
+		super().__init__(ts)
+		self.next_task = next_task
+
+	def create_hist(self):
+		return SchedHist(self)
+
+	def histable(self):
+		return not isinstance(self.next_task, IdleTask)
+
+class SoftirqNoise(Noise):
+	def __init__(self, ts, vec):
+		super().__init__(ts)
+		self.vec = vec
+
+	def create_hist(self):
+		return SoftirqHist(self, self.vec)
+
+class CallbackNoise(Noise):
+	def __init__(self, ts, func):
+		super().__init__(ts)
+		self.func = func
+
+	def create_hist(self):
+		return CallbackHist(self, self.func, self.name())
+
+class CsdNoise(CallbackNoise):
+	def name(self):
+		return "CSD (IPI)"
+
+class TimerNoise(CallbackNoise):
+	def name(self):
+		return "Timer"
+
+class WorkqueueNoise(CallbackNoise):
+	def name(self):
+		return "Workqueue"
+
+class SyscallNoise(CallbackNoise):
+	def name(self):
+		return "Syscall"
+
+	def match_exit(self, ne):
+		if self.func == ne.func:
+			return True
+		else:
+			return False
+
+class UnknownNoise(Noise):
+	def create_hist(self):
+		return UnknownHist(self)
+
+	def __repr__(self):
+		return "Unknown"
+
+class Hist:
+	def __init__(self, n):
+		self.nr_noise = 0
+		self.duration_list = []
+		self.add(n)
+
+	def add(self, n):
+		self.nr_noise += 1
+		duration = n.duration()
+		if duration is not None:
+			self.duration_list.append(duration)
+
+class IrqWorkHist(Hist):
+	def noise_match(self, n):
+		if isinstance(n, IrqWorkNoise):
+			return True
+		else:
+			return False
+
+	def __repr__(self):
+		return "Irq work"
+
+class LocalTimerHist(Hist):
+	def noise_match(self, n):
+		if isinstance(n, LocalTimerNoise):
+			return True
+		else:
+			return False
+
+	def __repr__(self):
+		return "Local timer"
+
+class PageFaultHist(Hist):
+	def noise_match(self, n):
+		if isinstance(n, PageFaultNoise):
+			return True
+		else:
+			return False
+
+	def __repr__(self):
+		return "Page fault"
+	
+class SchedHist(Hist):
+	def __init__(self, n):
+		super().__init__(n)
+		self.next_task = n.next_task
+
+	def noise_match(self, n):
+		if isinstance(n, SchedNoise) and n.next_task is self.next_task:
+			return True
+		else:
+			return False
+
+	def __repr__(self):
+		return "Sched switch: %s:%d" % (self.next_task.comm, self.next_task.pid)
+
+class SoftirqHist(Hist):
+	def __init__(self, n, vec):
+		super().__init__(n)
+		self.vec = vec
+
+	def noise_match(self, n):
+		if isinstance(n, SoftirqNoise) and self.vec == n.vec:
+			return True
+		else:
+			return False
+
+	def __repr__(self):
+		return "Softirq[%s]" % (self.vec)
+
+class CallbackHist(Hist):
+	def __init__(self, n, func, name):
+		super().__init__(n)
+		self.func = func
+		self.noise_class = n.__class__
+		self.name = name
+
+	def noise_match(self, n):
+		if isinstance(n, self.noise_class) and self.func == n.func:
+			return True
+		else:
+			return False
+
+	def __repr__(self):
+		return "%s (func = %s)" % (self.name, self.func)
+
+class UnknownHist(Hist):
+	def noise_match(self, n):
+		if isinstance(n, UnknownNoise):
+			return True
+		else:
+			return False
+
+	def __repr__(self):
+		return "Unknown"
+
+class Task:
+	current = {}
+
+	CTX_UNKNOWN = -1
+	CTX_KERNEL = 0
+	CTX_USER = 1
+
+	def __init__(self, pid, comm, cpu):
+		self.pid = pid
+		self.comm = comm
+		self.cpus = set([cpu])
+		self.curr_cpu = cpu
+		self.noise_stack = []
+		self.hists = []
+		self.nr_noise = 0
+		self.seq_nr_noise = 0
+		self.nr_hists = 0
+		self.noise_duration = 0
+		self.ctx = Task.CTX_UNKNOWN
+		self.kernel_entry_ts = -1
+
+	def sched_out(self, next_task, ts):
+		n = SchedNoise(next_task, ts)
+		self.push_noise(n)
+		next_task.sched_in(ts, self.curr_cpu)
+
+	def sched_in(self, ts, cpu):
+		self.curr_cpu = cpu
+		self.cpus.add(cpu)
+		Task.current[cpu] = self
+		self.pop_noise_match_class(ts, SchedNoise)
+	
+	def add_noise(self, n):
+		self.nr_noise += 1
+		self.add_hist(n)
+
+	def push_noise(self, n):
+		self.seq_nr_noise += 1
+		self.noise_stack.append(n)
+
+	def __pop_noise(self, ts):
+		if len(self.noise_stack) == 0:
+			return
+		n = self.noise_stack.pop()
+		if ts is not None:
+			n.complete(ts)
+		self.add_noise(n)
+
+	def pop_noise_match_class(self, ts, noise_class):
+		if len(self.noise_stack) == 0:
+			return
+		if not isinstance(self.noise_stack[-1], noise_class):
+			print("Expected last event was sched_switch on pid %d ts: %d" % (self.pid, ts))
+			return
+		self.__pop_noise(ts)
+
+	def pop_noise_match_exit(self, ts, ne):
+		for n in self.noise_stack[::-1]:
+			if n.match_exit(ne):
+				self.noise_stack.remove(n)
+				n.complete(ts)
+				self.add_noise(n)
+
+	def add_hist(self, n):
+		if not n.histable():
+			return
+		self.nr_hists += 1
+		for h in self.hists:
+			if h.noise_match(n):
+				h.add(n)
+				return
+		self.hists.append(n.create_hist())
+
+	def flush_noise_stack(self, ts):
+		# Single event can account their duration here
+		if self.seq_nr_noise > 1:
+			ts = None
+
+		while len(self.noise_stack):
+			self.__pop_noise(ts)
+
+		self.seq_nr_noise = 0
+
+	def kernel_exit(self, ts):
+		if self.ctx == Task.CTX_KERNEL:
+			self.noise_duration += ts - self.kernel_entry_ts
+			# Issue unknown noise if none happened during kernel round-trip
+			if self.seq_nr_noise == 0:
+				n = UnknownNoise(self.kernel_entry_ts)
+				n.complete(ts)
+				self.add_hist(n)
+		elif self.ctx != Task.CTX_UNKNOWN:
+			print("Unexpected kernel exit at %d (lost traces?)" % ts)
+
+		self.ctx = Task.CTX_USER
+		self.flush_noise_stack(ts)
+
+
+	def kernel_enter(self, ts):
+		if self.ctx != Task.CTX_USER and self.ctx != Task.CTX_UNKNOWN:
+			print("Unexpected kernel entry at %d (lost traces?)" % ts)
+		self.kernel_entry_ts = ts
+		self.ctx = Task.CTX_KERNEL
+			
+
+	def __repr__(self):
+		ret = "Task: %s Pid: %d" % (self.comm, self.pid)
+		ret += " cpus: %s" % self.cpus.__repr__().strip()
+		if len(self.cpus) > 1:
+			ret += " (Migrated!!!)"
+		return ret
+
+class IdleTask(Task):
+	pass
+
+taskdict = { }
+idle_taskdict = { }
+
+def get_task(pid, comm, cpu):
+	if pid == 0:
+		if cpu in idle_taskdict:
+			return (False, idle_taskdict[cpu])
+		else:
+			t = IdleTask(pid, comm, cpu)
+			idle_taskdict[cpu] = t
+	else:
+		if pid in taskdict:
+			return (False, taskdict[pid])
+		else:
+			t = Task(pid, comm, cpu)
+			taskdict[pid] = t
+	return (True, t)
+
+def rcu_dyntick(line, task, cpu, ts):
+	s = re.search("rcu_dyntick: (\S+)", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	what = s.group(1)
+	if what in ("Start", "StartIrq"):
+		task.kernel_exit(ts)
+	elif what in ("End", "EndIrq"):
+		task.kernel_enter(ts)
+
+	return True
+
+def sched_switch(line, task, cpu, ts):
+	s = re.search("sched_switch:\s+prev_comm=.+? prev_pid=[0-9]+.+?==> next_comm=(.+?) next_pid=([0-9]+)", line, re.S)
+	if s is None:
+		# sched_switch:         swapper/27:0 [120] R ==> kworker/27:1:578 [120]
+		s = re.search("sched_switch:\s+.+?:[0-9]+.+?==> (.+?):([0-9]+)", line, re.S)
+		if s is None:
+			print(line)
+			sys.exit(-1)
+			return False
+	(next_comm, next_pid) = (s.group(1), int(s.group(2)))
+	(is_new, next_task) = get_task(next_pid, next_comm, cpu)
+	task.sched_out(next_task, ts)
+
+	return True
+
+def softirq_entry(line, task, cpu, ts):
+	s = re.search("softirq_entry:\s+vec=[0-9] \[action=(.+?)\]", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	vec = s.group(1)
+	n = SoftirqNoise(ts, vec)
+	#n.complete(ts)
+	task.push_noise(n)
+
+	return True
+
+def irq_work_entry(line, task, cpu, ts):
+	s = re.search("irq_work_entry:.+", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	n = IrqWorkNoise(ts)
+	#n.complete(ts)
+	task.push_noise(n)
+
+	return True
+
+def page_fault_user(line, task, cpu, ts):
+	s = re.search("page_fault_user:.+", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	n = PageFaultNoise(ts)
+	#n.complete(ts)
+	task.push_noise(n)
+
+	return True
+
+def local_timer_entry(line, task, cpu, ts):
+	s = re.search("local_timer_entry:.+", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	n = LocalTimerNoise(ts)
+	#n.complete(ts)
+	task.push_noise(n)
+
+	return True
+
+def csd_function_entry(line, task, cpu, ts):
+	s = re.search("csd_function_entry:\s+func=([^,]+),", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	func = s.group(1)
+	n = CsdNoise(ts, func)
+	#n.complete(ts)
+	task.push_noise(n)
+
+	return True
+
+def timer_expire_entry(line, task, cpu, ts):
+	s = re.search("timer_expire_entry: timer=\S+ function=(\S+)", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	timer = s.group(1)
+	n = TimerNoise(ts, timer)
+	#n.complete(ts)
+	task.push_noise(n)
+
+	return True
+
+def hrtimer_expire_entry(line, task, cpu, ts):
+	# hrtimer_expire_entry: hrtimer=0xff41d0a32a1c7db8 now=7260211852499 function=hrtimer_wakeup/0x0
+	s = re.search("hrtimer_expire_entry: hrtimer=\S+ .+?function=(\S+)", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	timer = s.group(1)
+	n = TimerNoise(ts, timer)
+	#n.complete(ts)
+	task.push_noise(n)
+
+	return True
+
+def workqueue_execute_start(line, task, cpu, ts):
+	s = re.search("workqueue_execute_start: work struct [^:]+: function (\S+)", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	work = s.group(1)
+	n = WorkqueueNoise(ts, work)
+	#n.complete(ts)
+	task.push_noise(n)
+
+	return True
+
+def syscall_enter(line, task, cpu, ts):
+	s = re.search("(sys_[^(]+)[(]", line, re.S)
+	if s is None:
+		return False
+	name = s.group(1)
+	n = SyscallNoise(ts, name)
+	#n.complete(ts)
+	task.push_noise(n)
+	return True
+
+def syscall_exit(line, task, cpu, ts):
+	s = re.search("(sys_[^(]+) ->", line, re.S)
+	if s is None:
+		return False
+	name = s.group(1)
+	n = SyscallNoise(ts, name)
+	#n.complete(ts)
+	task.pop_noise_match_exit(ts, n)
+
+	return True
+
+def syscall(line, task, cpu, ts):
+	if syscall_enter(line, task, cpu, ts):
+		return True
+	elif syscall_exit(line, task, cpu, ts):
+		return True
+	else:
+		return False
+
+unhandled_events = set()
+
+def unhandled_event(line, task, cpu, ts):
+	s = re.match("([^: (]+).+", line, re.S)
+	if s is None:
+		print("Unhandled event parsing issue: %s" % line)
+		sys.exit(-1)
+	unhandled_events.add(s.group(1))
+
+	return True
+
+events = [
+	("rcu_dyntick:", rcu_dyntick),
+	("sched_switch", sched_switch),
+	("softirq_entry", softirq_entry),
+	("irq_work_entry", irq_work_entry),
+	("page_fault_user", page_fault_user),
+	("local_timer_entry", local_timer_entry),
+	("csd_function_entry", csd_function_entry),
+	("timer_expire_entry", timer_expire_entry),
+	("hrtimer_expire_entry", hrtimer_expire_entry),
+	("workqueue_execute_start", workqueue_execute_start),
+	("sys_", syscall),
+	("", unhandled_event), # must be last!
+]
+
+TRACE_REG = re.compile("^\s+(.+?)-([0-9]+)\s+\[([0-9]{3})\].+?([0-9]+.[0-9]{6}):\s+(.+?)$", re.S)
+nr = 0
+
+fsize = os.path.getsize(sys.argv[1])
+cursor = 0
+f = open(sys.argv[1])
+
+while True:
+	line = f.readline()
+	if not line:
+		break
+	cursor += float(len(line))
+	sys.stderr.write("Processing %f%%\r" % (cursor / fsize * 100))
+	#sys.stderr.write("Processing line: %d\r" % nr)
+	nr += 1
+	s = TRACE_REG.match(line)
+	if s is not None:
+		comm = s.group(1)
+		pid =  int(s.group(2))
+		cpu = int(s.group(3))
+		raw_ts = s.group(4).split(".")
+		ts = (int(raw_ts[0]) * (10**6)) + int(raw_ts[1])
+		rest = s.group(5)
+
+		(is_new, task) = get_task(pid, comm, cpu)
+		if is_new:
+			task.sched_in(0, cpu)
+
+		for e in events:
+			if rest.startswith(e[0]):
+				if e[1](rest, task, cpu, ts):
+					break
+		#print("%s %d %d %d" % (comm, pid, cpu, ts))
+
+tasklist = [i[1] for i in taskdict.items()]
+
+for t in tasklist:
+	t.flush_noise_stack(None)
+
+print("Unhandled events: %s" % ",".join(unhandled_events))
+print()
+
+#tasklist_sorted = sorted(tasklist, key = lambda t : t.nr_hists, reverse = True)
+def sort_duration(t):
+	total = 0
+	for h in t.hists:
+		total += sum(h.duration_list)
+	return total
+
+tasklist_sorted = sorted(tasklist, key = lambda t : t.noise_duration, reverse = True)
+#tasklist_sorted = sorted(tasklist, key = sort_duration, reverse = True)
+#sorted(tasklist, key = lambda t : t.nr_hists, reverse = True)
+for t in tasklist_sorted:
+	if t.nr_hists == 0:
+		continue
+	#t.hists = sorted(t.hists, key = lambda h : h.nr_noise, reverse = True)
+	#t.hists = sorted(t.hists, key = lambda h : sum(h.duration_list), reverse = True)
+	t.hists = sorted(t.hists, key = lambda h : sum(h.duration_list), reverse = True)
+	print(t)
+	total_duration = 0
+	for h in t.hists:
+		print("\t{: <45} Nr:{: >10}".format(*[h.__repr__(), h.nr_noise]), end = "")
+		if len(h.duration_list) == 0:
+			print("\tDuration:     Unknown")
+		else:
+			duration = sum(h.duration_list)
+			print("\tDuration:{: >12}".format(duration))
+			total_duration += duration
+		#print("Nr: %d\n" % len(h.noise_list))
+	print()
+	print("\t%s%s" % (" " * 46, "Total: {: >6}".format(t.nr_hists)), end = "")
+	print("\tTotal: {: >14}\n".format(t.noise_duration))
+"""
+for snap in sorted(Snaps):
+	for e in Snaps[snap]:
+		(ts, pid, waketime) = e
+		print("Lat: %d of %s:%d switch at %d wake at %d" % (snap, Tasks[pid].comm, pid, ts, waketime))
+
+print("Total: %d Avg: %d Stdev: %d" % (sum(Delays), statistics.mean(Delays), statistics.stdev(Delays)))
+"""
