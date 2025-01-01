@@ -22,6 +22,17 @@ class Noise:
 	def histable(self):
 		return True
 
+class SchedLatNoise(Noise):
+	def __init__(self, next_task, ts):
+		super().__init__(ts)
+		self.next_task = next_task
+
+	def create_hist(self):
+		return SchedLatHist(self)
+
+	def histable(self):
+		return not isinstance(self.next_task, IdleTask)
+
 class IrqWorkNoise(Noise):
 	def create_hist(self):
 		return IrqWorkHist(self)
@@ -132,6 +143,17 @@ class PageFaultHist(Hist):
 	def __repr__(self):
 		return "Page fault"
 	
+class SchedLatHist(Hist):
+	def __init__(self, n):
+		super().__init__(n)
+		self.next_task = n.next_task
+
+	def noise_match(self, n):
+		return isinstance(n, SchedLatNoise) and n.next_task is self.next_task
+
+	def __repr__(self):
+		return "Wakeup Latency"
+
 class SchedHist(Hist):
 	def __init__(self, n):
 		super().__init__(n)
@@ -289,7 +311,9 @@ class Task:
 			print("Unexpected kernel entry at %d (lost traces?)" % ts)
 		self.kernel_entry_ts = ts
 		self.ctx = Task.CTX_KERNEL
-			
+
+	def is_akawened(self):
+		return len(self.noise_stack) > 0 and isinstance(self.noise_stack[-1], SchedLatNoise)
 
 	def __repr__(self):
 		ret = "Task: %s Pid: %d" % (self.comm, self.pid)
@@ -333,6 +357,20 @@ def rcu_dyntick(line, task, cpu, ts):
 
 	return True
 
+
+def sched_wakeup(line, task, cpu, ts):
+	s = re.search("(?:sched_wakeup:\s+)?(.+?):([0-9]+)\s+\[([0-9]+)\]\s+CPU:([0-9]+)", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	(wake_comm, wake_pid) = (s.group(1), int(s.group(2)))
+	(_, wake_task) = get_task(wake_pid, wake_comm, cpu)
+
+	n = SchedLatNoise(wake_task, ts)
+	wake_task.push_noise(n)
+	return True
+
 def sched_switch(line, task, cpu, ts):
 	s = re.search("sched_switch:\s+prev_comm=.+? prev_pid=[0-9]+.+?==> next_comm=(.+?) next_pid=([0-9]+)", line, re.S)
 	if s is None:
@@ -342,8 +380,13 @@ def sched_switch(line, task, cpu, ts):
 			print(line)
 			sys.exit(-1)
 			return False
+
 	(next_comm, next_pid) = (s.group(1), int(s.group(2)))
 	(is_new, next_task) = get_task(next_pid, next_comm, cpu)
+
+	if next_task.is_akawened():
+		next_task.pop_noise_match_class(ts, SchedLatNoise)
+
 	task.sched_out(next_task, ts)
 
 	return True
@@ -492,6 +535,7 @@ def unhandled_event(line, task, cpu, ts):
 
 events = [
 	("rcu_dyntick:", rcu_dyntick),
+	("sched_wakeup", sched_wakeup),
 	("sched_switch", sched_switch),
 	("softirq_entry", softirq_entry),
 	("irq_work_entry", irq_work_entry),
