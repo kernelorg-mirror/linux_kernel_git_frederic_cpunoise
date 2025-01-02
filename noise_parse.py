@@ -276,6 +276,7 @@ class Task:
 				self.noise_stack.remove(n)
 				n.complete(ts)
 				self.add_noise(n)
+				return
 
 	def add_hist(self, n):
 		if not n.histable():
