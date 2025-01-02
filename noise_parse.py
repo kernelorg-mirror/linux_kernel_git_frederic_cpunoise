@@ -76,6 +76,12 @@ class CsdNoise(CallbackNoise):
 	def name(self):
 		return "CSD (IPI)"
 
+	def match_exit(self, ne):
+		if self.func == ne.func:
+			return True
+		else:
+			return False
+
 class TimerNoise(CallbackNoise):
 	def name(self):
 		return "Timer"
@@ -453,6 +459,18 @@ def csd_function_entry(line, task, cpu, ts):
 
 	return True
 
+def csd_function_exit(line, task, cpu, ts):
+	s = re.search("csd_function_exit:\s+func=([^,]+),", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	func = s.group(1)
+	n = CsdNoise(ts, func)
+	task.pop_noise_match_exit(ts, n)
+	
+	return True
+
 def timer_expire_entry(line, task, cpu, ts):
 	s = re.search("timer_expire_entry: timer=\S+ function=(\S+)", line, re.S)
 	if s is None:
@@ -542,6 +560,7 @@ events = [
 	("page_fault_user", page_fault_user),
 	("local_timer_entry", local_timer_entry),
 	("csd_function_entry", csd_function_entry),
+	("csd_function_exit", csd_function_exit),
 	("timer_expire_entry", timer_expire_entry),
 	("hrtimer_expire_entry", hrtimer_expire_entry),
 	("workqueue_execute_start", workqueue_execute_start),
