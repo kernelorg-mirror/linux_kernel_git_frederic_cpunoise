@@ -91,10 +91,7 @@ class CsdNoise(CallbackNoise):
 		return "CSD (IPI)"
 
 	def match_exit(self, ne):
-		if self.func == ne.func:
-			return True
-		else:
-			return False
+		return self.func == ne.func
 
 class TimerNoise(CallbackNoise):
 	def name(self):
@@ -109,10 +106,7 @@ class SyscallNoise(CallbackNoise):
 		return "Syscall"
 
 	def match_exit(self, ne):
-		if self.func == ne.func:
-			return True
-		else:
-			return False
+		return self.func == ne.func
 
 class UnknownNoise(Noise):
 	def create_hist(self):
@@ -135,30 +129,21 @@ class Hist:
 
 class IrqWorkHist(Hist):
 	def noise_match(self, n):
-		if isinstance(n, IrqWorkNoise):
-			return True
-		else:
-			return False
+		return isinstance(n, IrqWorkNoise)
 
 	def __repr__(self):
 		return "Irq work"
 
 class LocalTimerHist(Hist):
 	def noise_match(self, n):
-		if isinstance(n, LocalTimerNoise):
-			return True
-		else:
-			return False
+		return isinstance(n, LocalTimerNoise)
 
 	def __repr__(self):
 		return "Local timer"
 
 class PageFaultHist(Hist):
 	def noise_match(self, n):
-		if isinstance(n, PageFaultNoise):
-			return True
-		else:
-			return False
+		return isinstance(n, PageFaultNoise)
 
 	def __repr__(self):
 		return "Page fault"
@@ -191,10 +176,7 @@ class SchedHist(Hist):
 		self.next_task = n.next_task
 
 	def noise_match(self, n):
-		if isinstance(n, SchedNoise) and n.next_task is self.next_task:
-			return True
-		else:
-			return False
+		return isinstance(n, SchedNoise) and n.next_task is self.next_task
 
 	def __repr__(self):
 		return "Sched switch: %s:%d" % (self.next_task.comm, self.next_task.pid)
@@ -205,10 +187,7 @@ class SoftirqHist(Hist):
 		self.vec = vec
 
 	def noise_match(self, n):
-		if isinstance(n, SoftirqNoise) and self.vec == n.vec:
-			return True
-		else:
-			return False
+		return isinstance(n, SoftirqNoise) and self.vec == n.vec
 
 	def __repr__(self):
 		return "Softirq[%s]" % (self.vec)
@@ -221,20 +200,14 @@ class CallbackHist(Hist):
 		self.name = name
 
 	def noise_match(self, n):
-		if isinstance(n, self.noise_class) and self.func == n.func:
-			return True
-		else:
-			return False
+		return isinstance(n, self.noise_class) and self.func == n.func
 
 	def __repr__(self):
 		return "%s (func = %s)" % (self.name, self.func)
 
 class UnknownHist(Hist):
 	def noise_match(self, n):
-		if isinstance(n, UnknownNoise):
-			return True
-		else:
-			return False
+		return isinstance(n, UnknownNoise)
 
 	def __repr__(self):
 		return "Unknown"
