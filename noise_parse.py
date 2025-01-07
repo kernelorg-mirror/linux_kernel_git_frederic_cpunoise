@@ -56,6 +56,20 @@ class SchedNoise(Noise):
 	def histable(self):
 		return not isinstance(self.next_task, IdleTask)
 
+class SchedPreemptNoise(Noise):
+	def __init__(self, next_task, ts):
+		super().__init__(ts)
+		self.next_task = next_task
+
+	def create_hist(self):
+		return SchedPreemptHist(self)
+
+	def match_exit(self, n):
+		return isinstance(self, n)
+
+	def histable(self):
+		return not isinstance(self.next_task, IdleTask)
+
 class SoftirqNoise(Noise):
 	def __init__(self, ts, vec):
 		super().__init__(ts)
@@ -77,10 +91,7 @@ class CsdNoise(CallbackNoise):
 		return "CSD (IPI)"
 
 	def match_exit(self, ne):
-		if self.func == ne.func:
-			return True
-		else:
-			return False
+		return self.func == ne.func
 
 class TimerNoise(CallbackNoise):
 	def name(self):
@@ -95,10 +106,7 @@ class SyscallNoise(CallbackNoise):
 		return "Syscall"
 
 	def match_exit(self, ne):
-		if self.func == ne.func:
-			return True
-		else:
-			return False
+		return self.func == ne.func
 
 class UnknownNoise(Noise):
 	def create_hist(self):
@@ -121,30 +129,21 @@ class Hist:
 
 class IrqWorkHist(Hist):
 	def noise_match(self, n):
-		if isinstance(n, IrqWorkNoise):
-			return True
-		else:
-			return False
+		return isinstance(n, IrqWorkNoise)
 
 	def __repr__(self):
 		return "Irq work"
 
 class LocalTimerHist(Hist):
 	def noise_match(self, n):
-		if isinstance(n, LocalTimerNoise):
-			return True
-		else:
-			return False
+		return isinstance(n, LocalTimerNoise)
 
 	def __repr__(self):
 		return "Local timer"
 
 class PageFaultHist(Hist):
 	def noise_match(self, n):
-		if isinstance(n, PageFaultNoise):
-			return True
-		else:
-			return False
+		return isinstance(n, PageFaultNoise)
 
 	def __repr__(self):
 		return "Page fault"
@@ -160,16 +159,24 @@ class SchedLatHist(Hist):
 	def __repr__(self):
 		return "Wakeup Latency"
 
+class SchedPreemptHist(Hist):
+	def __init__(self, n):
+		super().__init__(n)
+		self.next_task = n.next_task
+
+	def noise_match(self, n):
+		return isinstance(n, SchedPreemptNoise) and n.next_task is self.next_task
+
+	def __repr__(self):
+		return "Preempt. noise"
+
 class SchedHist(Hist):
 	def __init__(self, n):
 		super().__init__(n)
 		self.next_task = n.next_task
 
 	def noise_match(self, n):
-		if isinstance(n, SchedNoise) and n.next_task is self.next_task:
-			return True
-		else:
-			return False
+		return isinstance(n, SchedNoise) and n.next_task is self.next_task
 
 	def __repr__(self):
 		return "Sched switch: %s:%d" % (self.next_task.comm, self.next_task.pid)
@@ -180,10 +187,7 @@ class SoftirqHist(Hist):
 		self.vec = vec
 
 	def noise_match(self, n):
-		if isinstance(n, SoftirqNoise) and self.vec == n.vec:
-			return True
-		else:
-			return False
+		return isinstance(n, SoftirqNoise) and self.vec == n.vec
 
 	def __repr__(self):
 		return "Softirq[%s]" % (self.vec)
@@ -196,20 +200,14 @@ class CallbackHist(Hist):
 		self.name = name
 
 	def noise_match(self, n):
-		if isinstance(n, self.noise_class) and self.func == n.func:
-			return True
-		else:
-			return False
+		return isinstance(n, self.noise_class) and self.func == n.func
 
 	def __repr__(self):
 		return "%s (func = %s)" % (self.name, self.func)
 
 class UnknownHist(Hist):
 	def noise_match(self, n):
-		if isinstance(n, UnknownNoise):
-			return True
-		else:
-			return False
+		return isinstance(n, UnknownNoise)
 
 	def __repr__(self):
 		return "Unknown"
@@ -221,11 +219,12 @@ class Task:
 	CTX_KERNEL = 0
 	CTX_USER = 1
 
-	def __init__(self, pid, comm, cpu):
+	def __init__(self, pid, comm, cpu, state=None):
 		self.pid = pid
 		self.comm = comm
 		self.cpus = set([cpu])
 		self.curr_cpu = cpu
+		self.curr_state = state
 		self.noise_stack = []
 		self.hists = []
 		self.nr_noise = 0
@@ -235,7 +234,12 @@ class Task:
 		self.ctx = Task.CTX_UNKNOWN
 		self.kernel_entry_ts = -1
 
-	def sched_out(self, next_task, ts):
+	def sched_out(self, next_task, ts, state):
+		self.curr_state = state
+		if self.is_preempted():
+			n = SchedPreemptNoise(self, ts)
+			self.push_noise(n)
+
 		n = SchedNoise(next_task, ts)
 		self.push_noise(n)
 		next_task.sched_in(ts, self.curr_cpu)
@@ -245,6 +249,8 @@ class Task:
 		self.cpus.add(cpu)
 		Task.current[cpu] = self
 		self.pop_noise_match_class(ts, SchedNoise)
+		# if a match exist, the task has been previously preempted
+		self.pop_noise_match_exit(ts, SchedPreemptNoise)
 	
 	def add_noise(self, n):
 		self.nr_noise += 1
@@ -322,6 +328,9 @@ class Task:
 	def is_akawened(self):
 		return len(self.noise_stack) > 0 and isinstance(self.noise_stack[-1], SchedLatNoise)
 
+	def is_preempted(self):
+		return self.curr_state == 'R' and not isinstance(self, IdleTask)
+
 	def __repr__(self):
 		ret = "Task: %s Pid: %d" % (self.comm, self.pid)
 		ret += " cpus: %s" % self.cpus.__repr__().strip()
@@ -335,18 +344,18 @@ class IdleTask(Task):
 taskdict = { }
 idle_taskdict = { }
 
-def get_task(pid, comm, cpu):
+def get_task(pid, comm, cpu, state=None):
 	if pid == 0:
 		if cpu in idle_taskdict:
 			return (False, idle_taskdict[cpu])
 		else:
-			t = IdleTask(pid, comm, cpu)
+			t = IdleTask(pid, comm, cpu, state)
 			idle_taskdict[cpu] = t
 	else:
 		if pid in taskdict:
 			return (False, taskdict[pid])
 		else:
-			t = Task(pid, comm, cpu)
+			t = Task(pid, comm, cpu, state)
 			taskdict[pid] = t
 	return (True, t)
 
@@ -364,7 +373,6 @@ def rcu_dyntick(line, task, cpu, ts):
 
 	return True
 
-
 def sched_wakeup(line, task, cpu, ts):
 	s = re.search("(?:sched_wakeup:\s+)?(.+?):([0-9]+)\s+\[([0-9]+)\]\s+CPU:([0-9]+)", line, re.S)
 	if s is None:
@@ -379,22 +387,23 @@ def sched_wakeup(line, task, cpu, ts):
 	return True
 
 def sched_switch(line, task, cpu, ts):
-	s = re.search("sched_switch:\s+prev_comm=.+? prev_pid=[0-9]+.+?==> next_comm=(.+?) next_pid=([0-9]+)", line, re.S)
+	s = re.search("sched_switch:\s+prev_comm=.+? prev_pid=[0-9]+.+?\[([0-9]+)\]\s+==> next_comm=(.+?) next_pid=([0-9]+)", line, re.S)
 	if s is None:
 		# sched_switch:         swapper/27:0 [120] R ==> kworker/27:1:578 [120]
-		s = re.search("sched_switch:\s+.+?:[0-9]+.+?==> (.+?):([0-9]+)", line, re.S)
+		s = re.search("sched_switch:\s+.+?:[0-9]+.+?\[.+?\]\s+([A-Z])\s+==> (.+?):([0-9]+)", line, re.S)
 		if s is None:
 			print(line)
 			sys.exit(-1)
 			return False
 
-	(next_comm, next_pid) = (s.group(1), int(s.group(2)))
-	(is_new, next_task) = get_task(next_pid, next_comm, cpu)
+	(state, next_comm, next_pid) = (s.group(1), s.group(2), int(s.group(3)))
+	(is_new, next_task) = get_task(next_pid, next_comm, cpu, state)
 
+	# True: the task has been woken up
 	if next_task.is_akawened():
 		next_task.pop_noise_match_class(ts, SchedLatNoise)
 
-	task.sched_out(next_task, ts)
+	task.sched_out(next_task, ts, state)
 
 	return True
 
