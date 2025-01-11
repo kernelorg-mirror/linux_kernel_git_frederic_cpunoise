@@ -581,9 +581,18 @@ events = [
 TRACE_REG = re.compile("^\s+(.+?)-([0-9]+)\s+\[([0-9]{3})\].+?([0-9]+.[0-9]{6}):\s+(.+?)$", re.S)
 nr = 0
 
+if len(sys.argv) == 1:
+	print("Usage: %s <filename>\n" % sys.argv[0])
+	exit(1)
+
+try:
+	f = open(sys.argv[1])
+except FileNotFoundError as e:
+	print("File '%s' not found.\n" % sys.argv[1])
+	exit(0)
+
 fsize = os.path.getsize(sys.argv[1])
 cursor = 0
-f = open(sys.argv[1])
 
 while True:
 	line = f.readline()
