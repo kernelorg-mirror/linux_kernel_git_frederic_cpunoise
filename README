@@ -7,7 +7,7 @@ To run:
 
 Look at the resulting trace in trace.1
 hrtimer events should report you the tick events (unless you haven't
-CONFIG_HRTIMER=y) and tick_stop events tell you what's going on with full dynticks
+CONFIG_HIGH_RES_TIMERS=y) and tick_stop events tell you what's going on with full dynticks
 behaviour.
 
 trace.1.example shows an example of a successful full dynticks behaviour. The

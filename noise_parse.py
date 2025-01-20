@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 
 import re, sys, statistics , os
+from optparse import OptionParser
+
 
 class Noise:
 	def __init__(self, ts):
@@ -561,6 +563,55 @@ def unhandled_event(line, task, cpu, ts):
 
 	return True
 
+"""""""""""""""""
+ CMD-LINE PARSER
+"""""""""""""""""
+def parse_arguments():
+	parser = OptionParser(usage="usage: %prog [options] trace_file")
+
+	parser.add_option("-t", "--task",
+						dest="exact_tasks",
+						action="append",
+						default=[],
+						help="Tasks pattern to filter (can be specified multiple times"
+							"It matches any tasks that starts with the specified pattern"
+	)
+
+	parser.add_option("-p", "--pid-task",
+						dest="pid_tasks",
+						action="append",
+						help="Match PID of the task",
+						default=[]
+	)
+
+	(options, args) = parser.parse_args()
+
+	trace_file = args[0]
+
+	return options, trace_file
+
+def task_matches_filters(task_name, task_pid, exact_tasks=None, pid_tasks=None):
+	exact_tasks = exact_tasks or []
+	pid_tasks = pid_tasks or []
+
+	# No flags provided
+	if not exact_tasks and not pid_tasks:
+		return True
+
+	# -t flag: match exact task name
+	if task_name in exact_tasks:
+		return True
+
+	# -p flag: match the PID
+	if str(task_pid) in pid_tasks:
+		return True
+
+	return False
+
+"""""""""""""""""
+ / CMD-LINE PARSER
+"""""""""""""""""
+
 events = [
 	("rcu_dyntick:", rcu_dyntick),
 	("sched_wakeup", sched_wakeup),
@@ -581,17 +632,15 @@ events = [
 TRACE_REG = re.compile("^\s+(.+?)-([0-9]+)\s+\[([0-9]{3})\].+?([0-9]+.[0-9]{6}):\s+(.+?)$", re.S)
 nr = 0
 
-if len(sys.argv) == 1:
-	print("Usage: %s <filename>\n" % sys.argv[0])
-	exit(1)
+(options, trace_file) = parse_arguments()
 
 try:
-	f = open(sys.argv[1])
+	f = open(trace_file)
 except FileNotFoundError as e:
-	print("File '%s' not found.\n" % sys.argv[1])
+	print("File '%s' not found.\n" % trace_file)
 	exit(0)
 
-fsize = os.path.getsize(sys.argv[1])
+fsize = os.path.getsize(trace_file)
 cursor = 0
 
 while True:
@@ -639,9 +688,14 @@ def sort_duration(t):
 tasklist_sorted = sorted(tasklist, key = lambda t : t.noise_duration, reverse = True)
 #tasklist_sorted = sorted(tasklist, key = sort_duration, reverse = True)
 #sorted(tasklist, key = lambda t : t.nr_hists, reverse = True)
+
 for t in tasklist_sorted:
 	if t.nr_hists == 0:
 		continue
+		
+	if task_matches_filters(t.comm, t.pid, options.exact_tasks, options.pid_tasks) == False:
+		continue
+
 	#t.hists = sorted(t.hists, key = lambda h : h.nr_noise, reverse = True)
 	#t.hists = sorted(t.hists, key = lambda h : sum(h.duration_list), reverse = True)
 	t.hists = sorted(t.hists, key = lambda h : sum(h.duration_list), reverse = True)
