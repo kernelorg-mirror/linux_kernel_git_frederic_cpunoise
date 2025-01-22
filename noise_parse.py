@@ -446,6 +446,18 @@ def page_fault_user(line, task, cpu, ts):
 
 	return True
 
+def page_fault_kernel(line, task, cpu, ts):
+	s = re.search("page_fault_kernel:.+", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	n = PageFaultNoise(ts)
+	#n.complete(ts)
+	task.push_noise(n)
+	
+	return True
+
 def local_timer_entry(line, task, cpu, ts):
 	s = re.search("local_timer_entry:.+", line, re.S)
 	if s is None:
@@ -619,6 +631,7 @@ events = [
 	("softirq_entry", softirq_entry),
 	("irq_work_entry", irq_work_entry),
 	("page_fault_user", page_fault_user),
+	("page_fault_kernel", page_fault_kernel),
 	("local_timer_entry", local_timer_entry),
 	("csd_function_entry", csd_function_entry),
 	("csd_function_exit", csd_function_exit),
