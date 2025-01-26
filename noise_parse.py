@@ -2,7 +2,7 @@
 
 import re, sys, statistics , os
 from optparse import OptionParser
-
+from dynticks_testing_lib import parse_cpulist
 
 class Noise:
 	def __init__(self, ts):
@@ -389,9 +389,12 @@ def sched_wakeup(line, task, cpu, ts):
 	return True
 
 def sched_switch(line, task, cpu, ts):
-	s = re.search("sched_switch:\s+prev_comm=.+? prev_pid=[0-9]+.+?\[([0-9]+)\]\s+==> next_comm=(.+?) next_pid=([0-9]+)", line, re.S)
+	# trace format
+	# ex: sched_switch: prev_comm=dynticks-testin prev_pid=140026 prev_prio=120 prev_state=S ==> next_comm=swapper/21 next_pid=0 next_prio=120
+	s = re.search("sched_switch:\s+prev_comm=.+? prev_pid=[0-9]+.+?prev_state=(\w)\s+==> next_comm=(.+?) next_pid=([0-9]+)", line, re.S)
 	if s is None:
-		# sched_switch:         swapper/27:0 [120] R ==> kworker/27:1:578 [120]
+		# trace-cmd format
+		# ex: sched_switch:         swapper/27:0 [120] R ==> kworker/27:1:578 [120]
 		s = re.search("sched_switch:\s+.+?:[0-9]+.+?\[.+?\]\s+([A-Z])\s+==> (.+?):([0-9]+)", line, re.S)
 		if s is None:
 			print(line)
@@ -509,8 +512,11 @@ def timer_expire_entry(line, task, cpu, ts):
 	return True
 
 def hrtimer_expire_entry(line, task, cpu, ts):
+	# trace format:
 	# hrtimer_expire_entry: hrtimer=0xff41d0a32a1c7db8 now=7260211852499 function=hrtimer_wakeup/0x0
-	s = re.search("hrtimer_expire_entry: hrtimer=\S+ .+?function=(\S+)", line, re.S)
+	# trace-cmd format:
+	# hrtimer_expire_entry: hrtimer=00000000fd65e54e function=tick_nohz_handler now=340292315972110
+	s = re.search("hrtimer_expire_entry: hrtimer=\S+ .*?function=(\S+)", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -596,6 +602,13 @@ def parse_arguments():
 						default=[]
 	)
 
+	parser.add_option("-c", "--cpulist",
+						action="callback",
+						callback=cpulist_callback,
+						type="string", nargs=1, dest="cpulist_raw",
+						help="List of nohz_full CPUs (ex: 2-11,13-18)"
+	)
+
 	(options, args) = parser.parse_args()
 
 	trace_file = args[0]
@@ -619,6 +632,12 @@ def task_matches_filters(task_name, task_pid, exact_tasks=None, pid_tasks=None):
 		return True
 
 	return False
+
+cpulist = None
+
+def cpulist_callback(option, opt, value, parser):
+	global cpulist
+	cpulist = parse_cpulist(value)
 
 """""""""""""""""
  / CMD-LINE PARSER
@@ -672,6 +691,9 @@ while True:
 		raw_ts = s.group(4).split(".")
 		ts = (int(raw_ts[0]) * (10**6)) + int(raw_ts[1])
 		rest = s.group(5)
+
+		if cpulist is not None and cpu not in cpulist:
+			continue
 
 		(is_new, task) = get_task(pid, comm, cpu)
 		if is_new:

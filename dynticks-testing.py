@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 
+from dynticks_testing_lib import parse_cpulist
 import os, sys, subprocess, time
 
 TRACING_PATH="/sys/kernel/tracing"
@@ -20,17 +21,6 @@ def trace_file_read(path):
 	return open(path).read()
 
 # Parse nohz_full=
-def parse_cpulist(s):
-	cpulist = []
-	for e in s.split(","):
-		if "-" not in e:
-			cpulist.append(int(e))
-		else:
-			(start, end) = e.split("-")
-			cpulist += range(int(start), int(end) + 1)
-	return cpulist
-			
-
 if not os.path.exists("/sys/devices/system/cpu/nohz_full"):
 	print("Can't find /sys/devices/system/cpu/nohz_full")
 	sys.exit(-1)
