@@ -63,7 +63,8 @@ trace_file_write("tracing_on", "0");
 trace_file_write("trace", "");
 
 EVENTS = ["sched/sched_switch", "irq", "workqueue/workqueue_execute_start", \
-		  "timer/hrtimer_expire_entry", "timer/tick_stop", "irq_vectors"]
+		  "timer/hrtimer_expire_entry", "timer/timer_expire_entry",
+		  "timer/tick_stop", "irq_vectors"]
 
 for event in EVENTS:
 	trace_file_write(os.path.join("events", event, "enable"), "1")
