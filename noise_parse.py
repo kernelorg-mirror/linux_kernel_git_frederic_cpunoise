@@ -47,6 +47,10 @@ class PageFaultNoise(Noise):
 	def create_hist(self):
 		return PageFaultHist(self)
 
+class ReschedVecNoise(Noise):
+	def create_hist(self):
+		return ReschedVecHist(self)
+
 class SchedNoise(Noise):
 	def __init__(self, next_task, ts):
 		super().__init__(ts)
@@ -71,6 +75,14 @@ class SchedPreemptNoise(Noise):
 
 	def histable(self):
 		return not isinstance(self.next_task, IdleTask)
+
+class TickDepNoise(Noise):
+	def __init__(self, ts, dep):
+		super().__init__(ts)
+		self.dep = dep
+
+	def create_hist(self):
+		return TickDepHist(self, self.dep)
 
 class SoftirqNoise(Noise):
 	def __init__(self, ts, vec):
@@ -129,6 +141,17 @@ class Hist:
 		if duration is not None:
 			self.duration_list.append(duration)
 
+class TickDepHist(Hist):
+	def __init__(self, n, vec):
+		super().__init__(n)
+		self.dep = dep
+
+	def noise_match(self, n):
+		return isinstance(n, TickDepNoise)
+
+	def __repr__(self):
+		return "Tick dep[%s]" % self.dep
+
 class IrqWorkHist(Hist):
 	def noise_match(self, n):
 		return isinstance(n, IrqWorkNoise)
@@ -149,6 +172,13 @@ class PageFaultHist(Hist):
 
 	def __repr__(self):
 		return "Page fault"
+
+class ReschedVecHist(Hist):
+	def noise_match(self, n):
+		return isinstance(n, ReschedVecNoise)
+
+	def __repr__(self):
+		return "Reschedule IPI"
 	
 class SchedLatHist(Hist):
 	def __init__(self, n):
@@ -361,6 +391,20 @@ def get_task(pid, comm, cpu, state=None):
 			taskdict[pid] = t
 	return (True, t)
 
+def tick_stop(line, task, cpu, ts):
+	# tick_stop: success=1 dependency=NONE
+	s = re.search("tick_stop: .+?dependency=(\w+)", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	dep = s.group(1)
+	if dep != "NONE":
+		n = TickDepNoise(ts, dep)
+		task.push_noise(n)
+
+	return True
+
 def rcu_dyntick(line, task, cpu, ts):
 	s = re.search("rcu_dyntick: (\S+)", line, re.S)
 	if s is None:
@@ -444,6 +488,18 @@ def page_fault_user(line, task, cpu, ts):
 		sys.exit(-1)
 		return False
 	n = PageFaultNoise(ts)
+	#n.complete(ts)
+	task.push_noise(n)
+
+	return True
+
+def reschedule_entry(line, task, cpu, ts):
+	s = re.search("reschedule_entry:.+", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	n = ReschedVecNoise(ts)
 	#n.complete(ts)
 	task.push_noise(n)
 
@@ -644,16 +700,18 @@ def cpulist_callback(option, opt, value, parser):
 """""""""""""""""
 
 events = [
+	("tick_stop:", tick_stop),
 	("rcu_dyntick:", rcu_dyntick),
 	("sched_wakeup", sched_wakeup),
 	("sched_switch", sched_switch),
 	("softirq_entry", softirq_entry),
 	("irq_work_entry", irq_work_entry),
 	("page_fault_user", page_fault_user),
-	("page_fault_kernel", page_fault_kernel),
+	("reschedule_entry", reschedule_entry),
 	("local_timer_entry", local_timer_entry),
-	("csd_function_entry", csd_function_entry),
+	("page_fault_kernel", page_fault_kernel),
 	("csd_function_exit", csd_function_exit),
+	("csd_function_entry", csd_function_entry),
 	("timer_expire_entry", timer_expire_entry),
 	("hrtimer_expire_entry", hrtimer_expire_entry),
 	("workqueue_execute_start", workqueue_execute_start),
