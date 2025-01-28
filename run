@@ -1,0 +1,9 @@
+#/bin/bash
+
+nohz_full=$(cat /sys/devices/system/cpu/nohz_full | xargs)
+./dynticks-testing.py
+
+if [ "$nohz_full" != "(null)" ]
+then
+	./noise_parse.py -c $nohz_full trace
+fi
