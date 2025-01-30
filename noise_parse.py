@@ -142,7 +142,7 @@ class Hist:
 			self.duration_list.append(duration)
 
 class TickDepHist(Hist):
-	def __init__(self, n, vec):
+	def __init__(self, n, dep):
 		super().__init__(n)
 		self.dep = dep
 
