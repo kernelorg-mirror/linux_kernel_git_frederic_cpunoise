@@ -395,7 +395,7 @@ def get_task(pid, comm, cpu, state=None):
 
 def tick_stop(line, task, cpu, ts):
 	# tick_stop: success=1 dependency=NONE
-	s = re.search("tick_stop: .+?dependency=(\w+)", line, re.S)
+	s = re.search("tick_stop: .+?dependency=(\\w+)", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -408,7 +408,7 @@ def tick_stop(line, task, cpu, ts):
 	return True
 
 def rcu_dyntick(line, task, cpu, ts):
-	s = re.search("rcu_dyntick: (\S+)", line, re.S)
+	s = re.search("rcu_dyntick: (\\S+)", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -422,7 +422,7 @@ def rcu_dyntick(line, task, cpu, ts):
 	return True
 
 def sched_wakeup(line, task, cpu, ts):
-	s = re.search("(?:sched_wakeup:\s+)?(.+?):([0-9]+)\s+\[([0-9]+)\]\s+CPU:([0-9]+)", line, re.S)
+	s = re.search("(?:sched_wakeup:\\s+)?(.+?):([0-9]+)\\s+\\[([0-9]+)\\]\\s+CPU:([0-9]+)", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -437,11 +437,11 @@ def sched_wakeup(line, task, cpu, ts):
 def sched_switch(line, task, cpu, ts):
 	# trace format
 	# ex: sched_switch: prev_comm=dynticks-testin prev_pid=140026 prev_prio=120 prev_state=S ==> next_comm=swapper/21 next_pid=0 next_prio=120
-	s = re.search("sched_switch:\s+prev_comm=.+? prev_pid=[0-9]+.+?prev_state=(\w)\s+==> next_comm=(.+?) next_pid=([0-9]+)", line, re.S)
+	s = re.search("sched_switch:\\s+prev_comm=.+? prev_pid=[0-9]+.+?prev_state=(\\w)\\s+==> next_comm=(.+?) next_pid=([0-9]+)", line, re.S)
 	if s is None:
 		# trace-cmd format
 		# ex: sched_switch:         swapper/27:0 [120] R ==> kworker/27:1:578 [120]
-		s = re.search("sched_switch:\s+.+?:[0-9]+.+?\[.+?\]\s+([A-Z])\s+==> (.+?):([0-9]+)", line, re.S)
+		s = re.search("sched_switch:\\s+.+?:[0-9]+.+?\\[.+?\\]\\s+([A-Z])\\s+==> (.+?):([0-9]+)", line, re.S)
 		if s is None:
 			print(line)
 			sys.exit(-1)
@@ -459,7 +459,7 @@ def sched_switch(line, task, cpu, ts):
 	return True
 
 def softirq_entry(line, task, cpu, ts):
-	s = re.search("softirq_entry:\s+vec=[0-9] \[action=(.+?)\]", line, re.S)
+	s = re.search("softirq_entry:\\s+vec=[0-9] \\[action=(.+?)\\]", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -532,7 +532,7 @@ def local_timer_entry(line, task, cpu, ts):
 	return True
 
 def csd_function_entry(line, task, cpu, ts):
-	s = re.search("csd_function_entry:\s+func=([^,]+),", line, re.S)
+	s = re.search("csd_function_entry:\\s+func=([^,]+),", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -545,7 +545,7 @@ def csd_function_entry(line, task, cpu, ts):
 	return True
 
 def csd_function_exit(line, task, cpu, ts):
-	s = re.search("csd_function_exit:\s+func=([^,]+),", line, re.S)
+	s = re.search("csd_function_exit:\\s+func=([^,]+),", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -557,7 +557,7 @@ def csd_function_exit(line, task, cpu, ts):
 	return True
 
 def timer_expire_entry(line, task, cpu, ts):
-	s = re.search("timer_expire_entry: timer=\S+ function=(\S+)", line, re.S)
+	s = re.search("timer_expire_entry: timer=\\S+ function=(\\S+)", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -574,7 +574,7 @@ def hrtimer_expire_entry(line, task, cpu, ts):
 	# hrtimer_expire_entry: hrtimer=0xff41d0a32a1c7db8 now=7260211852499 function=hrtimer_wakeup/0x0
 	# trace-cmd format:
 	# hrtimer_expire_entry: hrtimer=00000000fd65e54e function=tick_nohz_handler now=340292315972110
-	s = re.search("hrtimer_expire_entry: hrtimer=\S+ .*?function=(\S+)", line, re.S)
+	s = re.search("hrtimer_expire_entry: hrtimer=\\S+ .*?function=(\\S+)", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -587,7 +587,7 @@ def hrtimer_expire_entry(line, task, cpu, ts):
 	return True
 
 def workqueue_execute_start(line, task, cpu, ts):
-	s = re.search("workqueue_execute_start: work struct [^:]+: function (\S+)", line, re.S)
+	s = re.search("workqueue_execute_start: work struct [^:]+: function (\\S+)", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -729,7 +729,7 @@ events = [
 	("", unhandled_event), # must be last!
 ]
 
-TRACE_REG = re.compile("^\s+(.+?)-([0-9]+)\s+\[([0-9]{3})\].+?([0-9]+.[0-9]{6}):\s+(.+?)$", re.S)
+TRACE_REG = re.compile("^\\s+(.+?)-([0-9]+)\\s+\\[([0-9]{3})\\].+?([0-9]+.[0-9]{6}):\\s+(.+?)$", re.S)
 nr = 0
 
 (options, trace_file) = parse_arguments()
