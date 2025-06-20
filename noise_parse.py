@@ -755,6 +755,15 @@ except FileNotFoundError as e:
 fsize = os.path.getsize(trace_file)
 cursor = 0
 
+# check whether SMT is enabled
+smt_path = "/sys/devices/system/cpu/smt/active"
+if  not os.path.exists(smt_path):
+	print("Can't find %s " % smt_path)
+
+smt = open(smt_path).read().strip()
+if smt == "1":
+	print("SMT is enabled. On nohz_full with isolated CPU it should be disabled.")
+
 # check irq affinity on nohz CPUs
 if cpulist:
 	smp_list = get_irq_nohzfull_intersect(cpulist)
