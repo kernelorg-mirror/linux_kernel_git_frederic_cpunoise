@@ -716,6 +716,25 @@ def get_irq_nohzfull_intersect(cpulist):
 
 	return smp_list
 
+def get_thread_siblings_list():
+	thread_siblings_list = {};
+
+	cpu_folders = [entry for entry in os.listdir("/sys/devices/system/cpu/") if re.match(r'^cpu\d+$', entry)]
+
+	for hw_thread_s in cpu_folders:
+		hw_thread = hw_thread_s.replace("cpu","")
+		path = "/sys/devices/system/cpu/cpu%s/" % hw_thread
+		
+		path = os.path.join(path, "topology/thread_siblings_list")
+		s_list = open(path, "r")
+		hw_threads_list = s_list.read();
+		s_list.close()
+		
+		hw_threads = parse_cpulist(hw_threads_list)
+		thread_siblings_list[hw_thread] = hw_threads
+
+	return thread_siblings_list
+
 
 """""""""""""""""
  / CMD-LINE PARSER
@@ -762,11 +781,13 @@ if  not os.path.exists(smt_path):
 
 smt = open(smt_path).read().strip()
 if smt == "1":
-	print("SMT is enabled. On nohz_full with isolated CPU it should be disabled.")
+	print("SMT is enabled. On nohz_full with isolated CPU it should be disabled.\n")
 
 # check irq affinity on nohz CPUs
 if cpulist:
+	print("=== IRQ AFFINITY ON NOHZ_FULL CPUs  ===")
 	smp_list = get_irq_nohzfull_intersect(cpulist)
+
 	for cpus, vectors in smp_list.items():
 		sorted_vectors = ', '.join(map(str, sorted(vectors)))
 		sorted_cpus = ', '.join(map(str, sorted(cpus)))
@@ -775,6 +796,22 @@ if cpulist:
 		print("These CPUs are nohz_full:", end = " ")
 		print(sorted_cpus, sep=", ")
 		print()
+
+	# if SMT is set, siblings thread should be isolated
+	if smt == "1":
+		print("=== SIBLINGS THREAD <=> NOHZ_FULL  ===")
+
+		siblings_list = get_thread_siblings_list()
+		# both or none of the siblings should be in cpulist
+		for hw_thread in siblings_list:
+			siblings_nohz_intersect = set(siblings_list[hw_thread]) & set(cpulist)
+
+			if len(siblings_nohz_intersect) & 1:
+				print("!!!WARN!!! Both the SMT threads should be isolated:", end = " ")
+				print(siblings_list[hw_thread], sep=", ")
+				print("found only:", end=" ")
+				print(siblings_nohz_intersect, sep=", ")
+				print()
 
 while True:
 	line = f.readline()
