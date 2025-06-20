@@ -2,6 +2,7 @@
 
 import re, sys, statistics , os
 from optparse import OptionParser
+from collections import defaultdict
 from dynticks_testing_lib import parse_cpulist
 
 class Noise:
@@ -695,6 +696,27 @@ def cpulist_callback(option, opt, value, parser):
 	global cpulist
 	cpulist = parse_cpulist(value)
 
+def get_irq_nohzfull_intersect(cpulist):
+	smp_list = defaultdict(set)
+
+	for vec in os.listdir("/proc/irq"):
+		path = "/proc/irq/%s" % vec
+		if not os.path.isdir(path) or vec == "0":
+			continue
+		path = os.path.join(path, "smp_affinity_list")
+		f_list = open(path, "r")
+		affinity = f_list.read()
+		f_list.close()
+
+		# Be sure IRQ affinity isn't set for nohz CPUs
+		cpus = parse_cpulist(affinity)
+		res = set(cpulist) & set(cpus)
+		if len(res):
+			smp_list[frozenset(res)].add(vec)
+
+	return smp_list
+
+
 """""""""""""""""
  / CMD-LINE PARSER
 """""""""""""""""
@@ -732,6 +754,18 @@ except FileNotFoundError as e:
 
 fsize = os.path.getsize(trace_file)
 cursor = 0
+
+# check irq affinity on nohz CPUs
+if cpulist:
+	smp_list = get_irq_nohzfull_intersect(cpulist)
+	for cpus, vectors in smp_list.items():
+		sorted_vectors = ', '.join(map(str, sorted(vectors)))
+		sorted_cpus = ', '.join(map(str, sorted(cpus)))
+		print("Wrong IRQ affinity on vectors:", end = " ")
+		print(sorted_vectors, sep=", ")
+		print("These CPUs are nohz_full:", end = " ")
+		print(sorted_cpus, sep=", ")
+		print()
 
 while True:
 	line = f.readline()
