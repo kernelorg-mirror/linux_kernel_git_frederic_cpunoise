@@ -797,19 +797,19 @@ if cpulist:
 		print(sorted_cpus, sep=", ")
 		print()
 
-	# if SMT is set, siblings thread should be isolated
+	# if SMT is set, siblings thread should NOT be isolated
 	if smt == "1":
 		print("=== SIBLINGS THREAD <=> NOHZ_FULL  ===")
 
 		siblings_list = get_thread_siblings_list()
-		# both or none of the siblings should be in cpulist
+		# none of the siblings should be in cpulist
 		for hw_thread in siblings_list:
 			siblings_nohz_intersect = set(siblings_list[hw_thread]) & set(cpulist)
 
-			if len(siblings_nohz_intersect) & 1:
-				print("!!!WARN!!! Both the SMT threads should be isolated:", end = " ")
+			if len(siblings_nohz_intersect):
+				print("!!!WARN!!! SMT threads should NOT be isolated:", end = " ")
 				print(siblings_list[hw_thread], sep=", ")
-				print("found only:", end=" ")
+				print("found:", end=" ")
 				print(siblings_nohz_intersect, sep=", ")
 				print()
 
