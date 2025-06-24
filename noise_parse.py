@@ -2,6 +2,7 @@
 
 import re, sys, statistics , os
 from optparse import OptionParser
+from collections import defaultdict
 from dynticks_testing_lib import parse_cpulist
 
 class Noise:
@@ -695,6 +696,46 @@ def cpulist_callback(option, opt, value, parser):
 	global cpulist
 	cpulist = parse_cpulist(value)
 
+def get_irq_nohzfull_intersect(cpulist):
+	smp_list = defaultdict(set)
+
+	for vec in os.listdir("/proc/irq"):
+		path = "/proc/irq/%s" % vec
+		if not os.path.isdir(path) or vec == "0":
+			continue
+		path = os.path.join(path, "smp_affinity_list")
+		f_list = open(path, "r")
+		affinity = f_list.read()
+		f_list.close()
+
+		# Be sure IRQ affinity isn't set for nohz CPUs
+		cpus = parse_cpulist(affinity)
+		res = set(cpulist) & set(cpus)
+		if len(res):
+			smp_list[frozenset(res)].add(vec)
+
+	return smp_list
+
+def get_thread_siblings_list():
+	thread_siblings_list = {};
+
+	cpu_folders = [entry for entry in os.listdir("/sys/devices/system/cpu/") if re.match(r'^cpu\d+$', entry)]
+
+	for hw_thread_s in cpu_folders:
+		hw_thread = hw_thread_s.replace("cpu","")
+		path = "/sys/devices/system/cpu/cpu%s/" % hw_thread
+		
+		path = os.path.join(path, "topology/thread_siblings_list")
+		s_list = open(path, "r")
+		hw_threads_list = s_list.read();
+		s_list.close()
+		
+		hw_threads = parse_cpulist(hw_threads_list)
+		thread_siblings_list[hw_thread] = hw_threads
+
+	return thread_siblings_list
+
+
 """""""""""""""""
  / CMD-LINE PARSER
 """""""""""""""""
@@ -732,6 +773,45 @@ except FileNotFoundError as e:
 
 fsize = os.path.getsize(trace_file)
 cursor = 0
+
+# check whether SMT is enabled
+smt_path = "/sys/devices/system/cpu/smt/active"
+if  not os.path.exists(smt_path):
+	print("Can't find %s " % smt_path)
+
+smt = open(smt_path).read().strip()
+if smt == "1":
+	print("SMT is enabled. On nohz_full with isolated CPU it should be disabled.\n")
+
+# check irq affinity on nohz CPUs
+if cpulist:
+	print("=== IRQ AFFINITY ON NOHZ_FULL CPUs  ===")
+	smp_list = get_irq_nohzfull_intersect(cpulist)
+
+	for cpus, vectors in smp_list.items():
+		sorted_vectors = ', '.join(map(str, sorted(vectors)))
+		sorted_cpus = ', '.join(map(str, sorted(cpus)))
+		print("Wrong IRQ affinity on vectors:", end = " ")
+		print(sorted_vectors, sep=", ")
+		print("These CPUs are nohz_full:", end = " ")
+		print(sorted_cpus, sep=", ")
+		print()
+
+	# if SMT is set, siblings thread should be isolated
+	if smt == "1":
+		print("=== SIBLINGS THREAD <=> NOHZ_FULL  ===")
+
+		siblings_list = get_thread_siblings_list()
+		# both or none of the siblings should be in cpulist
+		for hw_thread in siblings_list:
+			siblings_nohz_intersect = set(siblings_list[hw_thread]) & set(cpulist)
+
+			if len(siblings_nohz_intersect) & 1:
+				print("!!!WARN!!! Both the SMT threads should be isolated:", end = " ")
+				print(siblings_list[hw_thread], sep=", ")
+				print("found only:", end=" ")
+				print(siblings_nohz_intersect, sep=", ")
+				print()
 
 while True:
 	line = f.readline()
