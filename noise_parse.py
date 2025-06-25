@@ -723,6 +723,14 @@ def get_thread_siblings_list():
 
 	for hw_thread_s in cpu_folders:
 		hw_thread = hw_thread_s.replace("cpu","")
+
+		# take only 1 result, eg:
+		# /sys/devices/system/cpu/cpu0/topology/thread_siblings_list:0,112
+		# results in 2 match: for 0 and 112
+		cpu_present = any(hw_thread in sublist for sublist in thread_siblings_list)
+		if cpu_present:
+			continue
+
 		path = "/sys/devices/system/cpu/cpu%s/" % hw_thread
 		
 		path = os.path.join(path, "topology/thread_siblings_list")
@@ -800,6 +808,8 @@ if cpulist:
 	# if SMT is set, siblings thread should NOT be isolated
 	if smt == "1":
 		print("=== SIBLINGS THREAD <=> NOHZ_FULL  ===")
+		print("The non-isolated core can be a source of noise, disturbing the isolated workload.")
+		print("If both are isolated, they can interfere with each other.\n");
 
 		siblings_list = get_thread_siblings_list()
 		# none of the siblings should be in cpulist
@@ -808,7 +818,7 @@ if cpulist:
 
 			if len(siblings_nohz_intersect):
 				print("!!!WARN!!! SMT threads should NOT be isolated:", end = " ")
-				print(siblings_list[hw_thread], sep=", ")
+				print(siblings_list[hw_thread], sep=", ", end=" ")
 				print("found:", end=" ")
 				print(siblings_nohz_intersect, sep=", ")
 				print()
