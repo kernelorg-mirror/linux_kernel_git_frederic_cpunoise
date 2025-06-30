@@ -3,7 +3,7 @@
 import re, sys, statistics , os
 from optparse import OptionParser
 from collections import defaultdict
-from dynticks_testing_lib import parse_cpulist
+from dynticks_testing_lib import parse_cpulist, get_cmdline_param
 
 class Noise:
 	def __init__(self, ts):
@@ -791,8 +791,14 @@ smt = open(smt_path).read().strip()
 if smt == "1":
 	print("SMT is enabled. On nohz_full with isolated CPU it should be disabled.\n")
 
+# "--cpulist" not set: reading nohz_full from /proc/cmdline
+if cpulist is None:
+	print("INFO: --cpulist param. not set: reading nohz_full from /proc/cmdline")
+	cpulist = parse_cpulist(get_cmdline_param("nohz_full"))
+
 # check irq affinity on nohz CPUs
 if cpulist:
+	print("nohz_full=%s\n" % cpulist)
 	print("=== IRQ AFFINITY ON NOHZ_FULL CPUs  ===")
 	smp_list = get_irq_nohzfull_intersect(cpulist)
 
