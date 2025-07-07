@@ -791,6 +791,13 @@ smt = open(smt_path).read().strip()
 if smt == "1":
 	print("SMT is enabled. On nohz_full with isolated CPU it should be disabled.\n")
 
+governor_path = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+if os.path.exists(governon_path):
+	governor = open(governor_path).read().strip()
+	print("CPU Governor used: %s" % governor)
+else:
+	print("Can't find %s " % governor_path)
+
 # "--cpulist" not set: reading nohz_full from /proc/cmdline
 if cpulist is None:
 	print("INFO: --cpulist param. not set: reading nohz_full from /proc/cmdline")
