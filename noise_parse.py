@@ -3,7 +3,7 @@
 import re, sys, statistics , os
 from optparse import OptionParser
 from collections import defaultdict
-from dynticks_testing_lib import parse_cpulist
+from dynticks_testing_lib import parse_cpulist, get_cmdline_param
 
 class Noise:
 	def __init__(self, ts):
@@ -723,6 +723,14 @@ def get_thread_siblings_list():
 
 	for hw_thread_s in cpu_folders:
 		hw_thread = hw_thread_s.replace("cpu","")
+
+		# take only 1 result, eg:
+		# /sys/devices/system/cpu/cpu0/topology/thread_siblings_list:0,112
+		# results in 2 match: for 0 and 112
+		cpu_present = any(hw_thread in sublist for sublist in thread_siblings_list)
+		if cpu_present:
+			continue
+
 		path = "/sys/devices/system/cpu/cpu%s/" % hw_thread
 		
 		path = os.path.join(path, "topology/thread_siblings_list")
@@ -783,8 +791,21 @@ smt = open(smt_path).read().strip()
 if smt == "1":
 	print("SMT is enabled. On nohz_full with isolated CPU it should be disabled.\n")
 
+governor_path = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+if os.path.exists(governon_path):
+	governor = open(governor_path).read().strip()
+	print("CPU Governor used: %s" % governor)
+else:
+	print("Can't find %s " % governor_path)
+
+# "--cpulist" not set: reading nohz_full from /proc/cmdline
+if cpulist is None:
+	print("INFO: --cpulist param. not set: reading nohz_full from /proc/cmdline")
+	cpulist = parse_cpulist(get_cmdline_param("nohz_full"))
+
 # check irq affinity on nohz CPUs
 if cpulist:
+	print("nohz_full=%s\n" % cpulist)
 	print("=== IRQ AFFINITY ON NOHZ_FULL CPUs  ===")
 	smp_list = get_irq_nohzfull_intersect(cpulist)
 
@@ -797,19 +818,21 @@ if cpulist:
 		print(sorted_cpus, sep=", ")
 		print()
 
-	# if SMT is set, siblings thread should be isolated
+	# if SMT is set, siblings thread should NOT be isolated
 	if smt == "1":
 		print("=== SIBLINGS THREAD <=> NOHZ_FULL  ===")
+		print("The non-isolated core can be a source of noise, disturbing the isolated workload.")
+		print("If both are isolated, they can interfere with each other.\n");
 
 		siblings_list = get_thread_siblings_list()
-		# both or none of the siblings should be in cpulist
+		# none of the siblings should be in cpulist
 		for hw_thread in siblings_list:
 			siblings_nohz_intersect = set(siblings_list[hw_thread]) & set(cpulist)
 
-			if len(siblings_nohz_intersect) & 1:
-				print("!!!WARN!!! Both the SMT threads should be isolated:", end = " ")
-				print(siblings_list[hw_thread], sep=", ")
-				print("found only:", end=" ")
+			if len(siblings_nohz_intersect):
+				print("!!!WARN!!! SMT threads should NOT be isolated:", end = " ")
+				print(siblings_list[hw_thread], sep=", ", end=" ")
+				print("found:", end=" ")
 				print(siblings_nohz_intersect, sep=", ")
 				print()
 
