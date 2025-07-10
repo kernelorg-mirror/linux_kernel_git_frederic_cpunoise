@@ -667,9 +667,17 @@ def parse_arguments():
 						help="List of nohz_full CPUs (ex: 2-11,13-18)"
 	)
 
+	parser.add_option("-o", "--check-config-only",
+						dest="only_configs", action="store_true",default=False,
+						help="Run a configuration check only. "
+							 "If a trace file is present, it will be ignored"
+	)
+
 	(options, args) = parser.parse_args()
 
-	trace_file = args[0]
+	trace_file = None
+	if len(args) == 1:
+		trace_file = args[0]
 
 	return options, trace_file
 
@@ -726,15 +734,6 @@ nr = 0
 
 (options, trace_file) = parse_arguments()
 
-try:
-	f = open(trace_file)
-except FileNotFoundError as e:
-	print("File '%s' not found.\n" % trace_file)
-	exit(0)
-
-fsize = os.path.getsize(trace_file)
-cursor = 0
-
 # if --cpulist is not set, read nohz_full
 if cpulist is None:
 	print("INFO: --cpulist param. not set: reading nohz_full from /proc/cmdline")
@@ -745,6 +744,19 @@ if cpulist is None:
 # Check system configurations...
 # (smt, irq affinity, siblings thread, governor,...)
 check_configs(cpulist)
+
+# Exit if only_configs is present
+if options.only_configs:
+	exit(0)
+
+try:
+	f = open(trace_file)
+except FileNotFoundError as e:
+	print("File '%s' not found.\n" % trace_file)
+	exit(0)
+
+fsize = os.path.getsize(trace_file)
+cursor = 0
 
 while True:
 	line = f.readline()
