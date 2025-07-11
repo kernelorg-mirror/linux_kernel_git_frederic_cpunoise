@@ -4,6 +4,7 @@ import re, sys, statistics , os
 from optparse import OptionParser
 from collections import defaultdict
 from dynticks_testing_lib import parse_cpulist, get_cmdline_param
+from check_configs_lib import check_configs
 
 class Noise:
 	def __init__(self, ts):
@@ -394,7 +395,7 @@ def get_task(pid, comm, cpu, state=None):
 
 def tick_stop(line, task, cpu, ts):
 	# tick_stop: success=1 dependency=NONE
-	s = re.search("tick_stop: .+?dependency=(\w+)", line, re.S)
+	s = re.search("tick_stop: .+?dependency=(\\w+)", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -407,7 +408,7 @@ def tick_stop(line, task, cpu, ts):
 	return True
 
 def rcu_dyntick(line, task, cpu, ts):
-	s = re.search("rcu_dyntick: (\S+)", line, re.S)
+	s = re.search("rcu_dyntick: (\\S+)", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -421,7 +422,7 @@ def rcu_dyntick(line, task, cpu, ts):
 	return True
 
 def sched_wakeup(line, task, cpu, ts):
-	s = re.search("(?:sched_wakeup:\s+)?(.+?):([0-9]+)\s+\[([0-9]+)\]\s+CPU:([0-9]+)", line, re.S)
+	s = re.search("(?:sched_wakeup:\\s+)?(.+?):([0-9]+)\\s+\\[([0-9]+)\\]\\s+CPU:([0-9]+)", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -436,11 +437,11 @@ def sched_wakeup(line, task, cpu, ts):
 def sched_switch(line, task, cpu, ts):
 	# trace format
 	# ex: sched_switch: prev_comm=dynticks-testin prev_pid=140026 prev_prio=120 prev_state=S ==> next_comm=swapper/21 next_pid=0 next_prio=120
-	s = re.search("sched_switch:\s+prev_comm=.+? prev_pid=[0-9]+.+?prev_state=(\w)\s+==> next_comm=(.+?) next_pid=([0-9]+)", line, re.S)
+	s = re.search("sched_switch:\\s+prev_comm=.+? prev_pid=[0-9]+.+?prev_state=(\\w)\\s+==> next_comm=(.+?) next_pid=([0-9]+)", line, re.S)
 	if s is None:
 		# trace-cmd format
 		# ex: sched_switch:         swapper/27:0 [120] R ==> kworker/27:1:578 [120]
-		s = re.search("sched_switch:\s+.+?:[0-9]+.+?\[.+?\]\s+([A-Z])\s+==> (.+?):([0-9]+)", line, re.S)
+		s = re.search("sched_switch:\\s+.+?:[0-9]+.+?\\[.+?\\]\\s+([A-Z])\\s+==> (.+?):([0-9]+)", line, re.S)
 		if s is None:
 			print(line)
 			sys.exit(-1)
@@ -458,7 +459,7 @@ def sched_switch(line, task, cpu, ts):
 	return True
 
 def softirq_entry(line, task, cpu, ts):
-	s = re.search("softirq_entry:\s+vec=[0-9] \[action=(.+?)\]", line, re.S)
+	s = re.search("softirq_entry:\\s+vec=[0-9] \\[action=(.+?)\\]", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -531,7 +532,7 @@ def local_timer_entry(line, task, cpu, ts):
 	return True
 
 def csd_function_entry(line, task, cpu, ts):
-	s = re.search("csd_function_entry:\s+func=([^,]+),", line, re.S)
+	s = re.search("csd_function_entry:\\s+func=([^,]+),", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -544,7 +545,7 @@ def csd_function_entry(line, task, cpu, ts):
 	return True
 
 def csd_function_exit(line, task, cpu, ts):
-	s = re.search("csd_function_exit:\s+func=([^,]+),", line, re.S)
+	s = re.search("csd_function_exit:\\s+func=([^,]+),", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -556,7 +557,7 @@ def csd_function_exit(line, task, cpu, ts):
 	return True
 
 def timer_expire_entry(line, task, cpu, ts):
-	s = re.search("timer_expire_entry: timer=\S+ function=(\S+)", line, re.S)
+	s = re.search("timer_expire_entry: timer=\\S+ function=(\\S+)", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -573,7 +574,7 @@ def hrtimer_expire_entry(line, task, cpu, ts):
 	# hrtimer_expire_entry: hrtimer=0xff41d0a32a1c7db8 now=7260211852499 function=hrtimer_wakeup/0x0
 	# trace-cmd format:
 	# hrtimer_expire_entry: hrtimer=00000000fd65e54e function=tick_nohz_handler now=340292315972110
-	s = re.search("hrtimer_expire_entry: hrtimer=\S+ .*?function=(\S+)", line, re.S)
+	s = re.search("hrtimer_expire_entry: hrtimer=\\S+ .*?function=(\\S+)", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -586,7 +587,7 @@ def hrtimer_expire_entry(line, task, cpu, ts):
 	return True
 
 def workqueue_execute_start(line, task, cpu, ts):
-	s = re.search("workqueue_execute_start: work struct [^:]+: function (\S+)", line, re.S)
+	s = re.search("workqueue_execute_start: work struct [^:]+: function (\\S+)", line, re.S)
 	if s is None:
 		print(line)
 		sys.exit(-1)
@@ -666,9 +667,17 @@ def parse_arguments():
 						help="List of nohz_full CPUs (ex: 2-11,13-18)"
 	)
 
+	parser.add_option("-o", "--check-config-only",
+						dest="only_configs", action="store_true",default=False,
+						help="Run a configuration check only. "
+							 "If a trace file is present, it will be ignored"
+	)
+
 	(options, args) = parser.parse_args()
 
-	trace_file = args[0]
+	trace_file = None
+	if len(args) == 1:
+		trace_file = args[0]
 
 	return options, trace_file
 
@@ -696,54 +705,6 @@ def cpulist_callback(option, opt, value, parser):
 	global cpulist
 	cpulist = parse_cpulist(value)
 
-def get_irq_nohzfull_intersect(cpulist):
-	smp_list = defaultdict(set)
-
-	for vec in os.listdir("/proc/irq"):
-		path = "/proc/irq/%s" % vec
-		if not os.path.isdir(path) or vec == "0":
-			continue
-		path = os.path.join(path, "smp_affinity_list")
-		f_list = open(path, "r")
-		affinity = f_list.read()
-		f_list.close()
-
-		# Be sure IRQ affinity isn't set for nohz CPUs
-		cpus = parse_cpulist(affinity)
-		res = set(cpulist) & set(cpus)
-		if len(res):
-			smp_list[frozenset(res)].add(vec)
-
-	return smp_list
-
-def get_thread_siblings_list():
-	thread_siblings_list = {};
-
-	cpu_folders = [entry for entry in os.listdir("/sys/devices/system/cpu/") if re.match(r'^cpu\d+$', entry)]
-
-	for hw_thread_s in cpu_folders:
-		hw_thread = hw_thread_s.replace("cpu","")
-
-		# take only 1 result, eg:
-		# /sys/devices/system/cpu/cpu0/topology/thread_siblings_list:0,112
-		# results in 2 match: for 0 and 112
-		cpu_present = any(hw_thread in sublist for sublist in thread_siblings_list)
-		if cpu_present:
-			continue
-
-		path = "/sys/devices/system/cpu/cpu%s/" % hw_thread
-		
-		path = os.path.join(path, "topology/thread_siblings_list")
-		s_list = open(path, "r")
-		hw_threads_list = s_list.read();
-		s_list.close()
-		
-		hw_threads = parse_cpulist(hw_threads_list)
-		thread_siblings_list[hw_thread] = hw_threads
-
-	return thread_siblings_list
-
-
 """""""""""""""""
  / CMD-LINE PARSER
 """""""""""""""""
@@ -768,10 +729,25 @@ events = [
 	("", unhandled_event), # must be last!
 ]
 
-TRACE_REG = re.compile("^\s+(.+?)-([0-9]+)\s+\[([0-9]{3})\].+?([0-9]+.[0-9]{6}):\s+(.+?)$", re.S)
+TRACE_REG = re.compile("^\\s+(.+?)-([0-9]+)\\s+\\[([0-9]{3})\\].+?([0-9]+.[0-9]{6}):\\s+(.+?)$", re.S)
 nr = 0
 
 (options, trace_file) = parse_arguments()
+
+# if --cpulist is not set, read nohz_full
+if cpulist is None:
+	print("INFO: --cpulist param. not set: reading nohz_full from /proc/cmdline")
+	nohz_list = get_cmdline_param("nohz_full")
+	if nohz_list:
+		cpulist = parse_cpulist(nohz_list)
+
+# Check system configurations...
+# (smt, irq affinity, siblings thread, governor,...)
+check_configs(cpulist)
+
+# Exit if only_configs is present
+if options.only_configs:
+	exit(0)
 
 try:
 	f = open(trace_file)
@@ -781,60 +757,6 @@ except FileNotFoundError as e:
 
 fsize = os.path.getsize(trace_file)
 cursor = 0
-
-# check whether SMT is enabled
-smt_path = "/sys/devices/system/cpu/smt/active"
-if  not os.path.exists(smt_path):
-	print("Can't find %s " % smt_path)
-
-smt = open(smt_path).read().strip()
-if smt == "1":
-	print("SMT is enabled. On nohz_full with isolated CPU it should be disabled.\n")
-
-governor_path = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
-if os.path.exists(governon_path):
-	governor = open(governor_path).read().strip()
-	print("CPU Governor used: %s" % governor)
-else:
-	print("Can't find %s " % governor_path)
-
-# "--cpulist" not set: reading nohz_full from /proc/cmdline
-if cpulist is None:
-	print("INFO: --cpulist param. not set: reading nohz_full from /proc/cmdline")
-	cpulist = parse_cpulist(get_cmdline_param("nohz_full"))
-
-# check irq affinity on nohz CPUs
-if cpulist:
-	print("nohz_full=%s\n" % cpulist)
-	print("=== IRQ AFFINITY ON NOHZ_FULL CPUs  ===")
-	smp_list = get_irq_nohzfull_intersect(cpulist)
-
-	for cpus, vectors in smp_list.items():
-		sorted_vectors = ', '.join(map(str, sorted(vectors)))
-		sorted_cpus = ', '.join(map(str, sorted(cpus)))
-		print("Wrong IRQ affinity on vectors:", end = " ")
-		print(sorted_vectors, sep=", ")
-		print("These CPUs are nohz_full:", end = " ")
-		print(sorted_cpus, sep=", ")
-		print()
-
-	# if SMT is set, siblings thread should NOT be isolated
-	if smt == "1":
-		print("=== SIBLINGS THREAD <=> NOHZ_FULL  ===")
-		print("The non-isolated core can be a source of noise, disturbing the isolated workload.")
-		print("If both are isolated, they can interfere with each other.\n");
-
-		siblings_list = get_thread_siblings_list()
-		# none of the siblings should be in cpulist
-		for hw_thread in siblings_list:
-			siblings_nohz_intersect = set(siblings_list[hw_thread]) & set(cpulist)
-
-			if len(siblings_nohz_intersect):
-				print("!!!WARN!!! SMT threads should NOT be isolated:", end = " ")
-				print(siblings_list[hw_thread], sep=", ", end=" ")
-				print("found:", end=" ")
-				print(siblings_nohz_intersect, sep=", ")
-				print()
 
 while True:
 	line = f.readline()
