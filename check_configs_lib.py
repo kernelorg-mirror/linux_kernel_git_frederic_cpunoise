@@ -2,7 +2,7 @@
 
 import os, re
 from collections import defaultdict
-from dynticks_testing_lib import parse_cpulist
+from dynticks_testing_lib import parse_cpulist, get_cmdline_param
 
 def get_irq_nohzfull_intersect(cpulist):
 	smp_list = defaultdict(set)
@@ -102,6 +102,80 @@ def check_siblings_thread(cpulist):
 			print(siblings_nohz_intersect, sep=", ")
 			print()
 
+def err_nohz_isolated(nohz_full, res):
+	print("Not all the nohz_full CPUs are isolated:")
+	print("nohz_full=%s\n" % nohz_full)
+	print("Found:",end=" ")
+	print(res, sep=", ")
+	print()
+
+def check_isolcpus_cpuset(cpulist):
+	print("=== ISOLCPUS / CPUSET AND NOHZ_FULL ===")
+
+	isolcpus = get_cmdline_param("isolcpus")
+	if isolcpus is not None:
+		print("isolcpus= found...")
+		isolcpus_list = parse_cpulist(isolcpus)
+		res = sorted(list(set(isolcpus_list) & set(cpulist)))
+		if cpulist != res:
+			err_nohz_isolated(cpulist, res)
+		else:
+			print("nohz_full is part of isolcpus. Ok!")
+	else:
+		found = False
+
+		# Walk cgroup directory tree
+		cgroup_root = "/sys/fs/cgroup"
+		
+		for root, dirs, files in os.walk(cgroup_root):
+			# check if partitions are present
+			if "cpuset.cpus.partition" in files:
+				partition_file = os.path.join(root, "cpuset.cpus.partition")
+				try:
+					with open(partition_file, "r") as pf:
+						partition_state = pf.read().strip()
+
+					# we're only interested in isolated partition here
+					if partition_state.startswith("isolated") is False:
+						continue
+
+					# if "isolated invalid" is present, nohz_full is not
+					# considered valid either
+					is_invalid = partition_state.startswith("isolated invalid")
+
+					found = True
+
+					cpus_file = os.path.join(root, "cpuset.cpus")
+					if os.path.exists(cpus_file):
+						with open(cpus_file, 'r') as f:
+							cpuset_content = f.read().strip()
+							cgroup_cpus = parse_cpulist(cpuset_content)
+					else:
+						cgroup_cpus = []
+
+					res = sorted(list(set(cgroup_cpus) & set(cpulist)))
+					match = ""
+
+					if is_invalid:
+						match = "Invalid partition configuration, check State above"
+					elif cpulist != res:
+						match = "Mismatch, nohz_full IS NOT part of cpuset"
+					else:
+						match = "nohz_full is part of cpuset. Ok!"
+
+					print(f"Found Partition: {root}")
+					print(f"  State        : {partition_state}")
+					print(f"  cpuset.cpus  : {sorted(cgroup_cpus)}")
+					print(f"  nohz_full    : {sorted(cpulist)}")
+					print(f"  Match        : {match}")
+					print("-"*60)
+
+				except IOError as e:
+					continue;
+
+		if not found:
+			print(f"Error: nohz_full specified {cpulist} but no isolated partitions (isolcpus | cpusets) found!")
+
 def check_configs(cpulist):
 	smt = is_smt_enabled()
 	check_cpu_governor()
@@ -110,6 +184,6 @@ def check_configs(cpulist):
 		check_irq_affinity(cpulist)
 
 		if smt:
-			check_siblings_thread(cpulist)	
-
+			check_siblings_thread(cpulist)
+			check_isolcpus_cpuset(cpulist)
 

@@ -10,7 +10,7 @@ def parse_cpulist(s):
 		else:
 			(start, end) = e.split("-")
 			cpulist += range(int(start), int(end) + 1)
-	return cpulist
+	return sorted(cpulist)
 
 def get_cmdline_param(param_name):
 	try:
