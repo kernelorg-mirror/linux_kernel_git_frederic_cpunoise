@@ -195,7 +195,7 @@ def check_isolcpus_cpuset(cpulist):
 					print(f"  State        : {partition_state}")
 					print(f"  cpuset.cpus  : {sorted(cgroup_cpus)}")
 					print(f"  nohz_full    : {sorted(cpulist)}")
-					print(f"  Match        : {match}")
+					print(f"  Match        : {cpuset_str}")
 					print(f"  CFS Quota    : {quota_str}")
 					print(f"  Valid Quota? : {is_quota_valid}")
 					print("-"*60)
