@@ -5,6 +5,9 @@ import re
 def parse_cpulist(s):
 	cpulist = []
 	for e in s.split(","):
+		if e in ["nohz","managed_irq","domain"]:
+			continue
+
 		if "-" not in e:
 			cpulist.append(int(e))
 		else:
