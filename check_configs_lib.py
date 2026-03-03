@@ -109,6 +109,52 @@ def err_nohz_isolated(nohz_full, res):
 	print(res, sep=", ")
 	print()
 
+# root is '/sys/fs/cgroup/folder'
+def is_cfs_quota_valid(root):
+	# check 'cpu.max' (cpu quotas) if present
+	cpu_quota = os.path.join(root, "cpu.max")
+	if os.path.exists(cpu_quota):
+		with open(cpu_quota, 'r') as f:
+			quota  = f.read().strip()
+			# period = f.read().strip()
+
+		cfs_quota_str = "Found CFS quota on nohz_full %s. This is not valid." % quota
+		valid = quota.split(None,1)[0].isnumeric() == False
+
+		if valid:
+			cfs_quota_str = "CFS quota '%s'. This is considered valid on nohz_full." % quota
+	else:
+		cfs_quota_str  = "CFS Quota not set, this is valid on nohz_full."
+		valid = True
+
+	return valid, cfs_quota_str
+
+# root is '/sys/fs/cgroup/folder'
+def is_isolated_cpuset_valid(root, partition_state, cpulist):
+	state_str = ""
+	cgroup_cpus = []
+	state = partition_state.startswith("isolated invalid")
+
+	# if "isolated invalid" is present, nohz_full is not
+	# considered valid either
+	if state:
+		return state, "Invalid partition configuration, check State above", cgroup_cpus
+
+	cpus_file = os.path.join(root, "cpuset.cpus")
+	if os.path.exists(cpus_file):
+		with open(cpus_file, 'r') as f:
+			cgroup_cpus = parse_cpulist(f.read().strip())
+
+	res = sorted(list(set(cgroup_cpus) & set(cpulist)))
+	state = cpulist != res
+
+	if state:
+		state_str = "Mismatch, nohz_full IS NOT part of cpuset"
+	else:
+		state_str = "nohz_full is part of cpuset. Ok!"
+
+	return state, state_str, cgroup_cpus
+
 def check_isolcpus_cpuset(cpulist):
 	print("=== ISOLCPUS / CPUSET AND NOHZ_FULL ===")
 
@@ -139,35 +185,19 @@ def check_isolcpus_cpuset(cpulist):
 					if partition_state.startswith("isolated") is False:
 						continue
 
-					# if "isolated invalid" is present, nohz_full is not
-					# considered valid either
-					is_invalid = partition_state.startswith("isolated invalid")
-
 					found = True
 
-					cpus_file = os.path.join(root, "cpuset.cpus")
-					if os.path.exists(cpus_file):
-						with open(cpus_file, 'r') as f:
-							cpuset_content = f.read().strip()
-							cgroup_cpus = parse_cpulist(cpuset_content)
-					else:
-						cgroup_cpus = []
-
-					res = sorted(list(set(cgroup_cpus) & set(cpulist)))
-					match = ""
-
-					if is_invalid:
-						match = "Invalid partition configuration, check State above"
-					elif cpulist != res:
-						match = "Mismatch, nohz_full IS NOT part of cpuset"
-					else:
-						match = "nohz_full is part of cpuset. Ok!"
+					# CFS should not be present
+					is_quota_valid,quota_str = is_cfs_quota_valid(root)
+					cfs_state, cpuset_str, cgroup_cpus = is_isolated_cpuset_valid(root, partition_state, cpulist)
 
 					print(f"Found Partition: {root}")
 					print(f"  State        : {partition_state}")
 					print(f"  cpuset.cpus  : {sorted(cgroup_cpus)}")
 					print(f"  nohz_full    : {sorted(cpulist)}")
-					print(f"  Match        : {match}")
+					print(f"  Match        : {cpuset_str}")
+					print(f"  CFS Quota    : {quota_str}")
+					print(f"  Valid Quota? : {is_quota_valid}")
 					print("-"*60)
 
 				except IOError as e:
@@ -175,6 +205,7 @@ def check_isolcpus_cpuset(cpulist):
 
 		if not found:
 			print(f"Error: nohz_full specified {cpulist} but no isolated partitions (isolcpus | cpusets) found!")
+
 
 def check_configs(cpulist):
 	smt = is_smt_enabled()
