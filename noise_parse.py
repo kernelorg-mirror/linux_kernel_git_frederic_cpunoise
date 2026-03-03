@@ -117,6 +117,9 @@ class WorkqueueNoise(CallbackNoise):
 	def name(self):
 		return "Workqueue"
 
+	def match_exit(self, ne):
+		return self.func == ne.func
+
 class SyscallNoise(CallbackNoise):
 	def name(self):
 		return "Syscall"
@@ -599,6 +602,19 @@ def workqueue_execute_start(line, task, cpu, ts):
 
 	return True
 
+def workqueue_execute_end(line, task, cpu, ts):
+	s = re.search("workqueue_execute_end: work struct [^:]+: function (\\S+)", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	work = s.group(1)
+	n = WorkqueueNoise(ts, work)
+	#n.complete(ts)
+	task.pop_noise_match_exit(ts, n)
+
+	return True
+
 def syscall_enter(line, task, cpu, ts):
 	s = re.search("(sys_[^(]+)[(]", line, re.S)
 	if s is None:
@@ -725,6 +741,7 @@ events = [
 	("timer_expire_entry", timer_expire_entry),
 	("hrtimer_expire_entry", hrtimer_expire_entry),
 	("workqueue_execute_start", workqueue_execute_start),
+	("workqueue_execute_end", workqueue_execute_end),
 	("sys_", syscall),
 	("", unhandled_event), # must be last!
 ]
