@@ -758,9 +758,9 @@ if cpulist is None:
 	if nohz_list:
 		cpulist = parse_cpulist(nohz_list)
 
-# Check system configurations...
-# (smt, irq affinity, siblings thread, governor,...)
-check_configs(cpulist)
+	# Check system configurations...
+	# (smt, irq affinity, siblings thread, governor,...)
+	check_configs(cpulist)
 
 # Exit if only_configs is present
 if options.only_configs:
