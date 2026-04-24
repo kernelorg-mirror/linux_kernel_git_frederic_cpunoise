@@ -56,6 +56,7 @@ def is_smt_enabled():
 	smt_path = "/sys/devices/system/cpu/smt/active"
 	if  not os.path.exists(smt_path):
 		print("Can't find %s " % smt_path)
+		return 0
 
 	smt = int(open(smt_path).read().strip())
 	if smt:
