@@ -775,12 +775,11 @@ if options.skip_config is False:
 if options.only_configs:
 	exit(0)
 
-try:
-	f = open(trace_file)
-except FileNotFoundError as e:
+if trace_file == None or os.path.exists(trace_file) is False:
 	print("File '%s' not found.\n" % trace_file)
 	exit(0)
 
+f = open(trace_file)
 fsize = os.path.getsize(trace_file)
 cursor = 0
 
