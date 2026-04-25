@@ -3,6 +3,30 @@
 import os, re
 from collections import defaultdict
 from dynticks_testing_lib import parse_cpulist, get_cmdline_param
+from enum import Enum
+
+class Log:
+	class Status(Enum):
+		OK = "\033[92m"     # Green
+		WARN = "\033[93m"   # Yellow
+		FAIL = "\033[91m"   # Red
+		INFO = "\033[94m"   # Blue
+		RESET = "\033[0m"
+
+	@classmethod
+	def print(cls, status, category, message=""):
+		reset = Log.Status.RESET.value
+		status_name = status.name
+		color = getattr(Log.Status, status_name, Log.Status.RESET).value
+
+		if message:
+			print(f"[{color}{status_name:^6}{reset}] {category:<22} | {message}")
+		else:
+			print(f"[{color}{status_name:^6}{reset}] {category:<22}")
+
+	@classmethod
+	def header(cls, title):
+		print(f"\n{Log.Status.INFO.value}=== {title} ==={Log.Status.RESET.value}")
 
 def get_irq_nohzfull_intersect(cpulist):
 	smp_list = defaultdict(set)
@@ -26,27 +50,26 @@ def get_irq_nohzfull_intersect(cpulist):
 
 def get_thread_siblings_list():
 	thread_siblings_list = {};
+	seen_cpus = set()
 
 	cpu_folders = [entry for entry in os.listdir("/sys/devices/system/cpu/") if re.match(r'^cpu\d+$', entry)]
 
 	for hw_thread_s in cpu_folders:
 		hw_thread = hw_thread_s.replace("cpu","")
 
-		# take only 1 result, eg:
-		# /sys/devices/system/cpu/cpu0/topology/thread_siblings_list:0,112
-		# results in 2 match: for 0 and 112
-		cpu_present = any(hw_thread in sublist for sublist in thread_siblings_list)
-		if cpu_present:
+		if hw_thread in seen_cpus:
 			continue
 
-		path = "/sys/devices/system/cpu/cpu%s/" % hw_thread
+		path = f"/sys/devices/system/cpu/cpu{hw_thread}/topology/thread_siblings_list"
 		
-		path = os.path.join(path, "topology/thread_siblings_list")
-		s_list = open(path, "r")
-		hw_threads_list = s_list.read();
-		s_list.close()
+		with open(path, "r") as s_list:
+			hw_threads_list = s_list.read();
 		
 		hw_threads = parse_cpulist(hw_threads_list)
+
+		# avoid checking same CPUs
+		seen_cpus.update(str(cpu) for cpu in hw_threads)
+
 		thread_siblings_list[hw_thread] = hw_threads
 
 	return thread_siblings_list
@@ -55,11 +78,12 @@ def is_smt_enabled():
 	# check whether SMT is enabled
 	smt_path = "/sys/devices/system/cpu/smt/active"
 	if  not os.path.exists(smt_path):
-		print("Can't find %s " % smt_path)
+		Log.print(Log.Status.FAIL, "SMT_CHECK", f"Can't find {smt_path}")
+		return 0
 
 	smt = int(open(smt_path).read().strip())
 	if smt:
-		print("SMT is enabled. On nohz_full with isolated CPU it should be disabled.\n")
+		Log.print(Log.Status.WARN, "SMT_CHECK", "SMT is enabled. On nohz_full with isolated CPU it should be disabled.")
 
 	return smt
 
@@ -67,28 +91,23 @@ def check_cpu_governor():
 	governor_path = "/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
 	if os.path.exists(governor_path):
 		governor = open(governor_path).read().strip()
-		print("CPU Governor used: %s" % governor)
+		Log.print(Log.Status.INFO, "CPU_GOVERNOR", f"CPU Governor used: {governor}")
 	else:
-		print("Can't find %s " % governor_path)
+		Log.print(Log.Status.FAIL, "CPU_GOVERNOR", f"Can't find {governor_path}")
 
 def check_irq_affinity(cpulist):
-	print("nohz_full=%s\n" % cpulist)
-	print("=== IRQ AFFINITY ON NOHZ_FULL CPUs  ===")
+	Log.header("IRQ AFFINITY ON NOHZ_FULL CPUs")
+	#Log.print(Log.Status.INFO, "NOHZ_FULL_CPUS", f"nohz_full={cpulist}")
 	smp_list = get_irq_nohzfull_intersect(cpulist)
 
 	for cpus, vectors in smp_list.items():
 		sorted_vectors = ', '.join(map(str, sorted(vectors)))
 		sorted_cpus = ', '.join(map(str, sorted(cpus)))
-		print("Wrong IRQ affinity on vectors:", end = " ")
-		print(sorted_vectors, sep=", ")
-		print("These CPUs are nohz_full:", end = " ")
-		print(sorted_cpus, sep=", ")
-		print()
+		Log.print(Log.Status.FAIL, "IRQ_AFFINITY_ERR", f"NOHZ CPUS {sorted_cpus} not isolated from IRQs: {sorted_vectors}")
 
 def check_siblings_thread(cpulist):
-	print("=== SIBLINGS THREAD <=> NOHZ_FULL  ===")
-	print("The non-isolated core can be a source of noise, disturbing the isolated workload.")
-	print("If both are isolated, they can interfere with each other.\n");
+	Log.header("SIBLINGS THREAD <=> NOHZ_FULL")
+	Log.print(Log.Status.INFO, "SMT_NOISE", "Non-isolated cores can cause noise. If both are isolated, they can interfere.")
 
 	siblings_list = get_thread_siblings_list()
 	# none of the siblings should be in cpulist
@@ -96,21 +115,14 @@ def check_siblings_thread(cpulist):
 		siblings_nohz_intersect = set(siblings_list[hw_thread]) & set(cpulist)
 
 		if len(siblings_nohz_intersect):
-			print("!!!WARN!!! SMT threads should NOT be isolated:", end = " ")
-			print(siblings_list[hw_thread], sep=", ", end=" ")
-			print("found:", end=" ")
-			print(siblings_nohz_intersect, sep=", ")
-			print()
+			Log.print(Log.Status.WARN, "SMT_ISOLATION_ERR", f"SMT threads should NOT be isolated: {siblings_list[hw_thread]} | found: {list(siblings_nohz_intersect)}")
 
 def err_nohz_isolated(nohz_full, res):
-	print("Not all the nohz_full CPUs are isolated:")
-	print("nohz_full=%s\n" % nohz_full)
-	print("Found:",end=" ")
-	print(res, sep=", ")
-	print()
+	Log.print(Log.Status.FAIL, "ISOLATION_MISMATCH", f"Not all nohz_full CPUs are isolated. nohz_full={nohz_full} | Found: {res}")
 
 # root is '/sys/fs/cgroup/folder'
 def is_cfs_quota_valid(root):
+	status = Log.Status.FAIL
 	# check 'cpu.max' (cpu quotas) if present
 	cpu_quota = os.path.join(root, "cpu.max")
 	if os.path.exists(cpu_quota):
@@ -119,26 +131,25 @@ def is_cfs_quota_valid(root):
 			# period = f.read().strip()
 
 		cfs_quota_str = "Found CFS quota on nohz_full %s. This is not valid." % quota
-		valid = quota.split(None,1)[0].isnumeric() == False
 
-		if valid:
+		if quota.split(None,1)[0].isnumeric() == False:
 			cfs_quota_str = "CFS quota '%s'. This is considered valid on nohz_full." % quota
+			status = Log.Status.OK
 	else:
 		cfs_quota_str  = "CFS Quota not set, this is valid on nohz_full."
-		valid = True
+		status = Log.Status.OK
 
-	return valid, cfs_quota_str
+	return status, cfs_quota_str
 
 # root is '/sys/fs/cgroup/folder'
 def is_isolated_cpuset_valid(root, partition_state, cpulist):
-	state_str = ""
 	cgroup_cpus = []
-	state = partition_state.startswith("isolated invalid")
+	invalid_state = partition_state.startswith("isolated invalid")
 
 	# if "isolated invalid" is present, nohz_full is not
 	# considered valid either
-	if state:
-		return state, "Invalid partition configuration, check State above", cgroup_cpus
+	if invalid_state:
+		return Log.Status.FAIL, "Invalid partition configuration, check State above", cgroup_cpus
 
 	cpus_file = os.path.join(root, "cpuset.cpus")
 	if os.path.exists(cpus_file):
@@ -146,27 +157,26 @@ def is_isolated_cpuset_valid(root, partition_state, cpulist):
 			cgroup_cpus = parse_cpulist(f.read().strip())
 
 	res = sorted(list(set(cgroup_cpus) & set(cpulist)))
-	state = cpulist != res
+	invalid_state = cpulist != res
 
-	if state:
-		state_str = "Mismatch, nohz_full IS NOT part of cpuset"
-	else:
-		state_str = "nohz_full is part of cpuset. Ok!"
+	if invalid_state:
+		return Log.Status.FAIL, "Mismatch, nohz_full IS NOT part of cpuset", cgroup_cpus
 
-	return state, state_str, cgroup_cpus
+	return Log.Status.OK, "nohz_full is part of cpuset. Ok!", cgroup_cpus
 
 def check_isolcpus_cpuset(cpulist):
-	print("=== ISOLCPUS / CPUSET AND NOHZ_FULL ===")
+	Log.header("ISOLCPUS / CPUSET AND NOHZ_FULL")
 
 	isolcpus = get_cmdline_param("isolcpus")
 	if isolcpus is not None:
-		print("isolcpus= found...")
+		Log.print(Log.Status.INFO, "ISOLCPUS_CMD", "isolcpus= found in cmdline")
+
 		isolcpus_list = parse_cpulist(isolcpus)
 		res = sorted(list(set(isolcpus_list) & set(cpulist)))
 		if cpulist != res:
 			err_nohz_isolated(cpulist, res)
 		else:
-			print("nohz_full is part of isolcpus. Ok!")
+			Log.print(Log.Status.OK, "ISOLCPUS_MATCH", "nohz_full is part of isolcpus. Ok!")
 	else:
 		found = False
 
@@ -191,21 +201,19 @@ def check_isolcpus_cpuset(cpulist):
 					is_quota_valid,quota_str = is_cfs_quota_valid(root)
 					cfs_state, cpuset_str, cgroup_cpus = is_isolated_cpuset_valid(root, partition_state, cpulist)
 
-					print(f"Found Partition: {root}")
-					print(f"  State        : {partition_state}")
-					print(f"  cpuset.cpus  : {sorted(cgroup_cpus)}")
-					print(f"  nohz_full    : {sorted(cpulist)}")
-					print(f"  Match        : {cpuset_str}")
-					print(f"  CFS Quota    : {quota_str}")
-					print(f"  Valid Quota? : {is_quota_valid}")
-					print("-"*60)
+					partition_log = Log.Status.OK
+					if partition_state.startswith("isolated invalid"):
+						partition_log = Log.Status.FAIL
+
+					Log.print(partition_log, "CGROUP_PARTITION", f"Path: {root} | State: {partition_state}")
+					Log.print(cfs_state, "CPUSET_MATCH", f"cpuset: {sorted(cgroup_cpus)} | nohz_full: {sorted(cpulist)} | {cpuset_str}")
+					Log.print(is_quota_valid, "CFS_QUOTA", f"CFS Quota: {quota_str}")
 
 				except IOError as e:
 					continue;
 
 		if not found:
-			print(f"Error: nohz_full specified {cpulist} but no isolated partitions (isolcpus | cpusets) found!")
-
+			Log.print(Log.Status.FAIL, "CPUSET_MISSING", f"nohz_full specified {cpulist} but no isolated partitions (isolcpus | cpusets) found!")
 
 def check_configs(cpulist):
 	smt = is_smt_enabled()
