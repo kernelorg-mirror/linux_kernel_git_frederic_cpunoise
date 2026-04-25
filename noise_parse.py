@@ -689,6 +689,12 @@ def parse_arguments():
 							 "If a trace file is present, it will be ignored"
 	)
 
+	parser.add_option("-s", "--skip-configs",
+						dest="skip_config", action="store_true",default=False,
+						help="Skip the configuration check. Useful if noise_parser "
+							 "is only used to parse captured data of another machine"
+	)
+
 	(options, args) = parser.parse_args()
 
 	trace_file = None
@@ -716,6 +722,7 @@ def task_matches_filters(task_name, task_pid, exact_tasks=None, pid_tasks=None):
 	return False
 
 cpulist = None
+skip_config = False
 
 def cpulist_callback(option, opt, value, parser):
 	global cpulist
@@ -758,9 +765,11 @@ if cpulist is None:
 	if nohz_list:
 		cpulist = parse_cpulist(nohz_list)
 
+
 # Check system configurations...
 # (smt, irq affinity, siblings thread, governor,...)
-check_configs(cpulist)
+if options.skip_config is False:
+	check_configs(cpulist)
 
 # Exit if only_configs is present
 if options.only_configs:
