@@ -12,9 +12,12 @@ def file_write(path, buf):
 
 def trace_file_write(path, buf):
 	path = os.path.join(TRACING_PATH, path)
-	f = open(path, "w")
-	f.write(buf)
-	f.close()
+	if os.path.exists(path):
+		f = open(path, "w")
+		f.write(buf)
+		f.close()
+	else:
+		print("Event not found: %s [Not supported arch? Missing tracepoint?]" % path)
 
 def trace_file_read(path):
 	path = os.path.join(TRACING_PATH, path)
