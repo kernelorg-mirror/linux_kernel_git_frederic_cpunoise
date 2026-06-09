@@ -28,8 +28,8 @@ if not os.path.exists("/sys/devices/system/cpu/nohz_full"):
 	print("Can't find /sys/devices/system/cpu/nohz_full")
 	sys.exit(-1)
 
-cpulist = open("/sys/devices/system/cpu/nohz_full").read()
-if cpulist.strip() == "(null)":
+cpulist = open("/sys/devices/system/cpu/nohz_full").read().strip()
+if cpulist == "(null)" or cpulist == '':
 	print("nohz_full= not set ?")
 	sys.exit(-1)
 
