@@ -94,6 +94,9 @@ class SoftirqNoise(Noise):
 	def create_hist(self):
 		return SoftirqHist(self, self.vec)
 
+	def match_exit(self, ne):
+		return self.vec == ne.vec
+
 class CallbackNoise(Noise):
 	def __init__(self, ts, func):
 		super().__init__(ts)
@@ -474,6 +477,18 @@ def softirq_entry(line, task, cpu, ts):
 
 	return True
 
+def softirq_exit(line, task, cpu, ts):
+	s = re.search("softirq_exit:\\s+vec=[0-9] \\[action=(.+?)\\]", line, re.S)
+	if s is None:
+		print(line)
+		sys.exit(-1)
+		return False
+	vec = s.group(1)
+	n = SoftirqNoise(ts, vec)
+	task.pop_noise_match_exit(ts, n)
+
+	return True
+
 def irq_work_entry(line, task, cpu, ts):
 	s = re.search("irq_work_entry:.+", line, re.S)
 	if s is None:
@@ -738,6 +753,7 @@ events = [
 	("sched_wakeup", sched_wakeup),
 	("sched_switch", sched_switch),
 	("softirq_entry", softirq_entry),
+	("softirq_exit", softirq_exit),
 	("irq_work_entry", irq_work_entry),
 	("page_fault_user", page_fault_user),
 	("reschedule_entry", reschedule_entry),

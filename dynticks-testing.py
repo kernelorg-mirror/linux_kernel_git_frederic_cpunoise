@@ -12,9 +12,12 @@ def file_write(path, buf):
 
 def trace_file_write(path, buf):
 	path = os.path.join(TRACING_PATH, path)
-	f = open(path, "w")
-	f.write(buf)
-	f.close()
+	if os.path.exists(path):
+		f = open(path, "w")
+		f.write(buf)
+		f.close()
+	else:
+		print("Event not found: %s [Not supported arch? Missing tracepoint?]" % path)
 
 def trace_file_read(path):
 	path = os.path.join(TRACING_PATH, path)
@@ -25,8 +28,8 @@ if not os.path.exists("/sys/devices/system/cpu/nohz_full"):
 	print("Can't find /sys/devices/system/cpu/nohz_full")
 	sys.exit(-1)
 
-cpulist = open("/sys/devices/system/cpu/nohz_full").read()
-if cpulist.strip() == "(null)":
+cpulist = open("/sys/devices/system/cpu/nohz_full").read().strip()
+if cpulist == "(null)" or cpulist == '':
 	print("nohz_full= not set ?")
 	sys.exit(-1)
 
@@ -62,9 +65,9 @@ for cpu in nohz_full:
 trace_file_write("tracing_on", "0");
 trace_file_write("trace", "");
 
-EVENTS = ["sched/sched_switch", "irq", "workqueue/workqueue_execute_start", \
+EVENTS = ["sched/sched_switch", "irq", "workqueue/workqueue_execute_start",
 		  "timer/hrtimer_expire_entry", "timer/timer_expire_entry",
-		  "timer/tick_stop", "irq_vectors"]
+		  "timer/tick_stop", "irq_vectors", "workqueue/workqueue_execute_end"]
 
 for event in EVENTS:
 	trace_file_write(os.path.join("events", event, "enable"), "1")
