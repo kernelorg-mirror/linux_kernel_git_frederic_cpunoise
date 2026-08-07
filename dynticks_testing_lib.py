@@ -1,11 +1,16 @@
 #!/usr/bin/python3
 
-import re
+import os, re
+
+CGROUP_ROOT = "/sys/fs/cgroup"
 
 def parse_cpulist(s):
 	cpulist = []
-	for e in s.split(","):
-		if e in ["nohz","managed_irq","domain"]:
+	for e in s.strip().split(","):
+		e = e.strip()
+		# several sysfs files (cpuset.cpus, effective_affinity_list, ...) can
+		# be empty: skip the empty fields instead of failing
+		if not e or e in ["nohz","managed_irq","domain"]:
 			continue
 
 		if "-" not in e:
@@ -27,3 +32,57 @@ def get_cmdline_param(param_name):
 		return param.group(1)
 
 	return None
+
+def read_file(path):
+	try:
+		with open(path, "r") as fhandle:
+			return fhandle.read().strip()
+	except (OSError, UnicodeDecodeError):
+		return None
+
+def read_int(path):
+	value = read_file(path)
+	if value is None:
+		return None
+
+	try:
+		return int(value)
+	except ValueError:
+		return None
+
+def safe_parse_cpulist(spec):
+	# parse_cpulist() raises on anything that is not a number or a range
+	try:
+		return parse_cpulist(spec)
+	except (ValueError, AttributeError):
+		return None
+
+def read_cpulist(path):
+	value = read_file(path)
+	if value is None or value in ("", "(null)"):
+		return []
+
+	return safe_parse_cpulist(value) or []
+
+# Return the cgroup v2 isolated partition owning 'cpu', or None
+def find_isolated_partition(cpu):
+	for root, dirs, files in os.walk(CGROUP_ROOT):
+		if "cpuset.cpus.partition" not in files:
+			continue
+
+		state = read_file(os.path.join(root, "cpuset.cpus.partition"))
+
+		# "isolated invalid" means the partition did not take effect
+		if state is None or not state.startswith("isolated") \
+		   or state.startswith("isolated invalid"):
+			continue
+
+		if cpu in read_cpulist(os.path.join(root, "cpuset.cpus.effective")):
+			return root
+
+	return None
+
+# Move a process into a cgroup v2 cgroup. Raises OSError on failure.
+def cgroup_attach(cgroup, pid):
+	with open(os.path.join(cgroup, "cgroup.procs"), "w") as fhandle:
+		fhandle.write(str(pid))
