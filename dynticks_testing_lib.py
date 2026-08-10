@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import os, re
+from itertools import groupby
 
 CGROUP_ROOT = "/sys/fs/cgroup"
 
@@ -86,3 +87,24 @@ def find_isolated_partition(cpu):
 def cgroup_attach(cgroup, pid):
 	with open(os.path.join(cgroup, "cgroup.procs"), "w") as fhandle:
 		fhandle.write(str(pid))
+
+def to_str_range(numbers):
+	# the grouping below needs int arithmetic and a numeric sort: callers may
+	# pass strings (e.g. os.listdir() entries) in an arbitrary order
+	numbers = sorted(int(n) for n in numbers)
+	ranges = []
+
+	# Group by the difference between the value and its index
+	for _, group in groupby(enumerate(numbers), lambda ix: ix[1] - ix[0]):
+		group_list = list(group)
+		first = group_list[0][1]
+		last = group_list[-1][1]
+
+		if first == last:
+			ranges.append(str(first))
+		else:
+			ranges.append(f"{first}-{last}")
+
+	return ",".join(ranges)
+
+

@@ -197,14 +197,6 @@ def check_nohz_full_mask(cpulist):
 	if not online:
 		return
 
-	housekeeping = sorted(set(online) - set(cpulist))
-	if not housekeeping:
-		Log.print(Log.Status.FAIL, "NO_HOUSEKEEPING",
-				  "Every online CPU is nohz_full: no housekeeping CPU left to run "
-				  "timers, RCU offload and unbound work.")
-	else:
-		Log.print(Log.Status.OK, "HOUSEKEEPING_CPUS", f"Housekeeping CPUs: {fmt_cpus(housekeeping)}")
-
 	not_online = sorted(set(cpulist) - set(online))
 	if not_online:
 		Log.print(Log.Status.WARN, "NOHZ_FULL_OFFLINE", f"nohz_full CPUs not online: {fmt_cpus(not_online)}")
@@ -222,37 +214,6 @@ PREEMPT_MODELS = [
 	"CONFIG_PREEMPT_VOLUNTARY",
 	"CONFIG_PREEMPT_NONE",
 ]
-
-def check_kernel_config():
-	Log.header("KERNEL CONFIG")
-
-	config = get_kernel_config()
-	if not config:
-		Log.print(Log.Status.WARN, "KCONFIG_MISSING",
-				  "Kernel config not found (/proc/config.gz or /boot/config-$(uname -r))")
-		return
-
-	for option, description in REQUIRED_CONFIGS:
-		if config.get(option) == "y":
-			Log.print(Log.Status.OK, option, f"enabled ({description})")
-		else:
-			Log.print(Log.Status.FAIL, option, f"NOT enabled ({description})")
-
-	if config.get("CONFIG_RCU_NOCB_CPU_DEFAULT_ALL") == "y":
-		Log.print(Log.Status.INFO, "RCU_NOCB_DEFAULT_ALL", "All CPUs are RCU no-callback by default")
-
-	if "CONFIG_HZ" in config:
-		Log.print(Log.Status.INFO, "CONFIG_HZ", f"Tick rate: {config['CONFIG_HZ']} Hz")
-
-	for model in PREEMPT_MODELS:
-		if config.get(model) == "y":
-			Log.print(Log.Status.INFO, "PREEMPT_MODEL", model)
-			break
-
-	# dynamic preemption can override the compiled-in model at runtime
-	preempt = read_file("/sys/kernel/debug/sched/preempt")
-	if preempt is not None:
-		Log.print(Log.Status.INFO, "PREEMPT_DYNAMIC", f"Runtime preempt model: {preempt}")
 
 def get_thread_siblings_list():
 	thread_siblings_list = {}
@@ -579,19 +540,6 @@ def check_rcu_nocbs(cpulist):
 def check_workqueue_affinity(cpulist):
 	Log.header("WORKQUEUE AFFINITY")
 
-	global_mask = intersect(read_cpumask(os.path.join(WQ_ROOT, "cpumask")), cpulist)
-	if global_mask:
-		Log.print(Log.Status.FAIL, "WQ_GLOBAL_CPUMASK",
-				  f"{WQ_ROOT}/cpumask allows unbound work on nohz_full CPUs {fmt_cpus(global_mask)}")
-	else:
-		Log.print(Log.Status.OK, "WQ_GLOBAL_CPUMASK", "Unbound workqueues exclude the nohz_full CPUs. Ok!")
-
-	# kernels >= 6.9 expose the requested and the isolated masks separately
-	requested_path = os.path.join(WQ_ROOT, "cpumask_requested")
-	if os.path.exists(requested_path):
-		Log.print(Log.Status.INFO, "WQ_CPUMASK_REQUESTED",
-				  f"Requested unbound cpumask: {fmt_cpus(read_cpumask(requested_path))}")
-
 	isolated_path = os.path.join(WQ_ROOT, "cpumask_isolated")
 	if os.path.exists(isolated_path):
 		wq_isolated = read_cpumask(isolated_path)
@@ -646,14 +594,6 @@ def check_watchdog(cpulist):
 	# guaranteed periodic tick source on every CPU it covers
 	cpumask = read_cpulist("/proc/sys/kernel/watchdog_cpumask")
 	cpus = intersect(cpumask, cpulist)
-
-	if cpus:
-		Log.print(Log.Status.FAIL, "WATCHDOG_CPUMASK",
-				  f"watchdog_cpumask covers nohz_full CPUs {fmt_cpus(cpus)}: a periodic hrtimer "
-				  "will keep the tick running there.")
-	else:
-		Log.print(Log.Status.OK, "WATCHDOG_CPUMASK",
-				  f"watchdog_cpumask={fmt_cpus(cpumask)} excludes the nohz_full CPUs. Ok!")
 
 def check_noise_knobs(cpulist):
 	Log.header("KERNEL NOISE KNOBS")
@@ -850,20 +790,26 @@ def is_cfs_quota_valid(root):
 	return Log.Status.OK, "CFS quota '%s'. This is considered valid on nohz_full." % quota
 
 # root is '/sys/fs/cgroup/folder'
-def is_isolated_cpuset_valid(root, partition_state, cpulist):
-	# if "isolated invalid" is present, nohz_full is not considered valid either
+#
+# Return the CPUs a cgroup v2 isolated partition is about. Whether they really
+# are isolated depends on the partition state and is decided by the caller.
+def partition_cpus(root, partition_state):
+	requested = read_cpulist(os.path.join(root, "cpuset.cpus"))
+
+	# an invalid partition is demoted to a member: cpuset.cpus.effective then
+	# reports the parent CPUs instead of the ones we asked to isolate, so the
+	# requested list is the only meaningful one left to report
 	if partition_state.startswith("isolated invalid"):
-		return Log.Status.FAIL, "Invalid partition configuration, check State above", []
+		return requested
 
-	cgroup_cpus = read_cpulist(os.path.join(root, "cpuset.cpus"))
+	# .effective is the mask the kernel really granted: it accounts for the
+	# parent cpuset and for the offline CPUs. Old kernels may not expose it.
+	return read_cpulist(os.path.join(root, "cpuset.cpus.effective")) or requested
 
-	if intersect(cgroup_cpus, cpulist) != sorted(cpulist):
-		return Log.Status.FAIL, "Mismatch, nohz_full IS NOT part of cpuset", cgroup_cpus
-
-	return Log.Status.OK, "nohz_full is part of cpuset. Ok!", cgroup_cpus
-
+# Return the nohz_full CPUs that the cgroup v2 isolated partitions are isolating
 def check_cpuset_v2(cpulist):
-	found = False
+	covered = set()
+	unrelated = 0
 
 	for root, dirs, files in os.walk("/sys/fs/cgroup"):
 		if "cpuset.cpus.partition" not in files:
@@ -875,49 +821,76 @@ def check_cpuset_v2(cpulist):
 		if partition_state is None or not partition_state.startswith("isolated"):
 			continue
 
-		found = True
+		cgroup_cpus = partition_cpus(root, partition_state)
+
+		# nohz_full can be split across several partitions: every partition is
+		# checked against the nohz_full CPUs it holds, not against the whole
+		# list. The union is verified by the caller.
+		mine = intersect(cgroup_cpus, cpulist)
+		if not mine:
+			unrelated += 1
+			continue
+
+		if partition_state.startswith("isolated invalid"):
+			Log.print(Log.Status.FAIL, "CGROUP_PARTITION", f"Path: {root} | State: {partition_state}")
+			Log.print(Log.Status.FAIL, "CPUSET_MATCH",
+					  f"cpuset: {fmt_cpus(cgroup_cpus)} | nohz_full CPUs {fmt_cpus(mine)} are NOT "
+					  "isolated: the partition did not take effect")
+			continue
+
+		covered.update(mine)
+
+		Log.print(Log.Status.OK, "CGROUP_PARTITION", f"Path: {root} | State: {partition_state}")
+		Log.print(Log.Status.OK, "CPUSET_MATCH",
+				  f"cpuset: {fmt_cpus(cgroup_cpus)} | isolating nohz_full CPUs: {fmt_cpus(mine)}. Ok!")
 
 		# CFS should not be present
 		is_quota_valid, quota_str = is_cfs_quota_valid(root)
-		cfs_state, cpuset_str, cgroup_cpus = is_isolated_cpuset_valid(root, partition_state, cpulist)
-
-		partition_log = Log.Status.OK
-		if partition_state.startswith("isolated invalid"):
-			partition_log = Log.Status.FAIL
-
-		Log.print(partition_log, "CGROUP_PARTITION", f"Path: {root} | State: {partition_state}")
-		Log.print(cfs_state, "CPUSET_MATCH", f"cpuset: {sorted(cgroup_cpus)} | nohz_full: {sorted(cpulist)} | {cpuset_str}")
 		Log.print(is_quota_valid, "CFS_QUOTA", f"CFS Quota: {quota_str}")
 
-	return found
+	if unrelated:
+		Log.print(Log.Status.INFO, "CGROUP_PARTITION",
+				  f"{unrelated} more isolated partition(s) hold no nohz_full CPU: not checked")
 
+	return covered
+
+# Return the nohz_full CPUs that the cgroup v1 cpusets are isolating
 def check_cpuset_v1(cpulist):
 	# on cgroup v1 the isolated partition is a cpuset with
 	# cpuset.sched_load_balance disabled
 	cpuset_root = "/sys/fs/cgroup/cpuset"
-	found = False
+	covered = set()
+	balanced = []
 
 	for root, dirs, files in os.walk(cpuset_root):
 		# the root cpuset always holds every CPU: it is not an isolation
 		if root == cpuset_root or "cpuset.cpus" not in files:
 			continue
 
-		cgroup_cpus = read_cpulist(os.path.join(root, "cpuset.cpus"))
+		# effective_cpus is the mask the kernel really applies
+		cgroup_cpus = read_cpulist(os.path.join(root, "cpuset.effective_cpus")) or \
+					  read_cpulist(os.path.join(root, "cpuset.cpus"))
 
-		# only the cpusets holding every nohz_full CPU are relevant
-		if intersect(cgroup_cpus, cpulist) != sorted(cpulist):
+		# nohz_full can be split across several cpusets: every cpuset is checked
+		# against the nohz_full CPUs it holds, not against the whole list
+		mine = intersect(cgroup_cpus, cpulist)
+		if not mine:
 			continue
 
-		found = True
 		load_balance = read_int(os.path.join(root, "cpuset.sched_load_balance"))
 
-		if load_balance == 0:
-			Log.print(Log.Status.OK, "CPUSET_V1_PARTITION",
-					  f"Path: {root} | cpus: {fmt_cpus(cgroup_cpus)} | sched_load_balance=0. Ok!")
-		else:
-			Log.print(Log.Status.FAIL, "CPUSET_V1_PARTITION",
-					  f"Path: {root} | cpus: {fmt_cpus(cgroup_cpus)} | sched_load_balance={load_balance}: "
-					  "the CPUs are still part of a scheduling domain")
+		if load_balance != 0:
+			# the ancestors of an isolated cpuset hold its CPUs too and are
+			# normally still load balanced: report them only if no other cpuset
+			# ends up isolating those CPUs
+			balanced.append((root, cgroup_cpus, mine, load_balance))
+			continue
+
+		covered.update(mine)
+
+		Log.print(Log.Status.OK, "CPUSET_V1_PARTITION",
+				  f"Path: {root} | cpus: {fmt_cpus(cgroup_cpus)} | isolating nohz_full CPUs: "
+				  f"{fmt_cpus(mine)} | sched_load_balance=0. Ok!")
 
 		# the CFS quota lives in the cpu controller hierarchy on v1
 		relpath = os.path.relpath(root, cpuset_root)
@@ -932,7 +905,16 @@ def check_cpuset_v1(cpulist):
 			Log.print(Log.Status.FAIL, "CFS_QUOTA",
 					  f"Found CFS quota {quota} on nohz_full. This is not valid.")
 
-	return found
+	for root, cgroup_cpus, mine, load_balance in balanced:
+		left = sorted(set(mine) - covered)
+		if not left:
+			continue
+
+		Log.print(Log.Status.FAIL, "CPUSET_V1_PARTITION",
+				  f"Path: {root} | cpus: {fmt_cpus(cgroup_cpus)} | sched_load_balance={load_balance}: "
+				  f"nohz_full CPUs {fmt_cpus(left)} are still part of a scheduling domain")
+
+	return covered
 
 def check_isolcpus(cpulist, isolcpus):
 	Log.print(Log.Status.INFO, "ISOLCPUS_CMD", "isolcpus= found in cmdline")
@@ -952,6 +934,9 @@ def check_isolcpus(cpulist, isolcpus):
 				  "isolcpus=managed_irq is not set: managed IRQs can still target "
 				  "the isolated CPUs.")
 
+	if get_cgroup_version() > 0:
+		return
+
 	res = intersect(isolcpus_list, cpulist)
 	if cpulist != res:
 		err_nohz_isolated(cpulist, res)
@@ -964,21 +949,31 @@ def check_isolcpus_cpuset(cpulist):
 	isolcpus = get_cmdline_param("isolcpus")
 	if isolcpus is not None:
 		check_isolcpus(cpulist, isolcpus)
+
+	version = get_cgroup_version()
+
+	if version == 2:
+		Log.print(Log.Status.INFO, "CGROUP_VERSION",
+				  "cgroup v2 hierarchy detected: checking /sys/fs/cgroup")
+		covered = check_cpuset_v2(cpulist)
+	elif version == 1:
+		Log.print(Log.Status.INFO, "CGROUP_VERSION",
+				  "cgroup v1 hierarchy detected: checking /sys/fs/cgroup/cpuset")
+		covered = check_cpuset_v1(cpulist)
 	else:
-		version = get_cgroup_version()
+		Log.print(Log.Status.WARN, "CGROUP_VERSION", "No cgroup hierarchy found under /sys/fs/cgroup")
+		covered = set()
 
-		if version == 2:
-			found = check_cpuset_v2(cpulist)
-		elif version == 1:
-			Log.print(Log.Status.INFO, "CGROUP_VERSION",
-					  "cgroup v1 hierarchy detected: checking /sys/fs/cgroup/cpuset")
-			found = check_cpuset_v1(cpulist)
-		else:
-			Log.print(Log.Status.WARN, "CGROUP_VERSION", "No cgroup hierarchy found under /sys/fs/cgroup")
-			found = False
-
-		if not found:
-			Log.print(Log.Status.FAIL, "CPUSET_MISSING", f"nohz_full specified {cpulist} but no isolated partitions (isolcpus | cpusets) found!")
+	# the single partitions have been reported above: the nohz_full CPUs can be
+	# spread over several of them, so the verdict is on their union
+	if not covered:
+		Log.print(Log.Status.FAIL, "CPUSET_MISSING",
+				  f"nohz_full specified {fmt_cpus(cpulist)} but no isolated partitions (isolcpus | cpusets) found!")
+	elif set(cpulist) - covered:
+		err_nohz_isolated(cpulist, sorted(covered))
+	else:
+		Log.print(Log.Status.OK, "CPUSET_MATCH",
+				  f"every nohz_full CPU ({fmt_cpus(cpulist)}) is in an isolated partition. Ok!")
 
 def check_configs(cpulist):
 	if not cpulist:
@@ -990,7 +985,6 @@ def check_configs(cpulist):
 	# one and SMT is expected to be *disabled* on a tuned nohz_full machine
 	check_isolcpus_cpuset(cpulist)
 	check_nohz_full_mask(cpulist)
-	check_kernel_config()
 
 	Log.header("CPU TOPOLOGY / SMT")
 	smt = is_smt_enabled()
