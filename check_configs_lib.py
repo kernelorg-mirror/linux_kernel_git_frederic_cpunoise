@@ -4,7 +4,7 @@ import os, re, sys, gzip
 from collections import defaultdict
 from dynticks_testing_lib import (parse_cpulist, get_cmdline_param, read_file,
 								  read_int, read_cpulist, safe_parse_cpulist)
-from enum import Enum
+from log_output import Log
 
 # max number of items (IRQ vectors, workqueues, ...) listed in a single message
 MAX_LISTED = 12
@@ -19,29 +19,6 @@ STAT_INTERVAL_WARN_S = 10
 ISOLCPUS_FLAGS = ("nohz", "domain", "managed_irq")
 
 WQ_ROOT = "/sys/devices/virtual/workqueue"
-
-class Log:
-	class Status(Enum):
-		OK = "\033[92m"     # Green
-		WARN = "\033[93m"   # Yellow
-		FAIL = "\033[91m"   # Red
-		INFO = "\033[94m"   # Blue
-		RESET = "\033[0m"
-
-	@classmethod
-	def print(cls, status, category, message=""):
-		reset = Log.Status.RESET.value
-		status_name = status.name
-		color = getattr(Log.Status, status_name, Log.Status.RESET).value
-
-		if message:
-			print(f"[{color}{status_name:^6}{reset}] {category:<22} | {message}")
-		else:
-			print(f"[{color}{status_name:^6}{reset}] {category:<22}")
-
-	@classmethod
-	def header(cls, title):
-		print(f"\n{Log.Status.INFO.value}=== {title} ==={Log.Status.RESET.value}")
 
 def parse_cpumask(mask):
 	# "ffff" and "0000ffff,ffffffff" are both valid hex cpumasks
@@ -164,42 +141,6 @@ def get_kernel_config():
 def check_nohz_full_mask(cpulist):
 	Log.header("NOHZ_FULL / ISOLATION MASK")
 
-	# the applied mask can differ from the requested one: CPU0 is always kept
-	# as housekeeping and the mask is clamped to CONFIG_NR_CPUS
-	effective = read_cpulist("/sys/devices/system/cpu/nohz_full")
-	requested = expand_cpu_spec(get_cmdline_param("nohz_full"))
-
-	if not effective:
-		Log.print(Log.Status.FAIL, "NOHZ_FULL_MASK",
-				  "/sys/devices/system/cpu/nohz_full is empty: full dynticks is NOT active")
-	else:
-		Log.print(Log.Status.INFO, "NOHZ_FULL_MASK", f"Effective nohz_full: {fmt_cpus(effective)}")
-
-	if requested is None:
-		Log.print(Log.Status.WARN, "NOHZ_FULL_CMDLINE", "No nohz_full= found in /proc/cmdline")
-	elif effective and sorted(requested) != sorted(effective):
-		dropped = sorted(set(requested) - set(effective))
-		Log.print(Log.Status.FAIL, "NOHZ_FULL_MISMATCH",
-				  f"cmdline nohz_full={fmt_cpus(requested)} but kernel applied "
-				  f"{fmt_cpus(effective)} | dropped: {fmt_cpus(dropped)}")
-
-	isolated = read_cpulist("/sys/devices/system/cpu/isolated")
-	Log.print(Log.Status.INFO, "ISOLATED_MASK", f"/sys/devices/system/cpu/isolated: {fmt_cpus(isolated)}")
-
-	if not cpulist:
-		return
-
-	if 0 in cpulist:
-		Log.print(Log.Status.FAIL, "CPU0_NOHZ_FULL",
-				  "CPU0 is in the nohz_full list. The kernel always keeps CPU0 as housekeeping.")
-
-	online = get_online_cpus()
-	if not online:
-		return
-
-	not_online = sorted(set(cpulist) - set(online))
-	if not_online:
-		Log.print(Log.Status.WARN, "NOHZ_FULL_OFFLINE", f"nohz_full CPUs not online: {fmt_cpus(not_online)}")
 
 REQUIRED_CONFIGS = [
 	("CONFIG_NO_HZ_FULL", "full dynticks support"),
@@ -262,7 +203,7 @@ def check_siblings_thread(cpulist):
 		siblings_nohz_intersect = intersect(siblings_list[hw_thread], cpulist)
 
 		if siblings_nohz_intersect:
-			Log.print(Log.Status.WARN, "SMT_ISOLATION_ERR", f"SMT threads should NOT be isolated: {siblings_list[hw_thread]} | found: {siblings_nohz_intersect}")
+			Log.print(Log.Status.WARN, "SMT_ISOLATION", f"SMT threads should NOT be isolated: {siblings_list[hw_thread]} | found: {siblings_nohz_intersect}")
 
 def check_cpu_governor(cpulist):
 	Log.header("CPU FREQUENCY / IDLE")
@@ -395,7 +336,7 @@ def check_irq_affinity(cpulist):
 	smp_list = get_irq_nohzfull_intersect(cpulist, "smp_affinity_list")
 
 	for cpus, vectors in smp_list.items():
-		Log.print(Log.Status.FAIL, "IRQ_AFFINITY_ERR",
+		Log.print(Log.Status.FAIL, "IRQ_AFFINITY",
 				  f"NOHZ CPUS {fmt_cpus(cpus)} not isolated from IRQs: {describe_vectors(vectors)}")
 
 	# smp_affinity_list is only the *requested* mask: managed interrupts
@@ -410,7 +351,7 @@ def check_irq_affinity(cpulist):
 			managed[cpus] = only_effective
 
 	for cpus, vectors in managed.items():
-		Log.print(Log.Status.FAIL, "IRQ_EFFECTIVE_ERR",
+		Log.print(Log.Status.FAIL, "IRQ_EFFECTIVE",
 				  f"NOHZ CPUS {fmt_cpus(cpus)} are the effective target of IRQs: {describe_vectors(vectors)}")
 
 	if managed:
@@ -500,11 +441,11 @@ def check_rcu_nocbs(cpulist):
 	if nocbs:
 		missing = sorted(set(cpulist) - set(nocbs))
 		if missing:
-			Log.print(Log.Status.FAIL, "RCU_NOCBS_MISMATCH",
+			Log.print(Log.Status.FAIL, "RCU_NOCBS_COVERAGE",
 					  f"nohz_full CPUs {fmt_cpus(missing)} are NOT in rcu_nocbs: RCU callbacks "
 					  "will run there and keep the tick alive.")
 		else:
-			Log.print(Log.Status.OK, "RCU_NOCBS_MATCH", "All nohz_full CPUs offload RCU callbacks. Ok!")
+			Log.print(Log.Status.OK, "RCU_NOCBS_COVERAGE", "All nohz_full CPUs offload RCU callbacks. Ok!")
 
 	if has_cmdline_flag("rcu_nocb_poll"):
 		Log.print(Log.Status.INFO, "RCU_NOCB_POLL",
@@ -552,22 +493,6 @@ def check_workqueue_affinity(cpulist):
 		else:
 			Log.print(Log.Status.OK, "WQ_CPUMASK_ISOLATED",
 					  f"Workqueue isolated cpumask: {fmt_cpus(wq_isolated)}")
-
-	# per-workqueue masks, the writeback workqueue included
-	offenders = defaultdict(set)
-	entries = sorted(os.listdir(WQ_ROOT)) if os.path.isdir(WQ_ROOT) else []
-
-	for entry in entries:
-		cpus = intersect(read_cpumask(os.path.join(WQ_ROOT, entry, "cpumask")), cpulist)
-		if cpus:
-			offenders[frozenset(cpus)].add(entry)
-
-	for cpus, wqs in offenders.items():
-		Log.print(Log.Status.WARN, "WQ_PER_WQ_CPUMASK",
-				  f"Workqueues allowed on nohz_full CPUs {fmt_cpus(cpus)}: {truncate(sorted(wqs))}")
-
-	if not offenders:
-		Log.print(Log.Status.OK, "WQ_PER_WQ_CPUMASK", "No per-workqueue cpumask covers the nohz_full CPUs. Ok!")
 
 def check_watchdog(cpulist):
 	Log.header("WATCHDOG")
@@ -946,6 +871,44 @@ def check_isolcpus(cpulist, isolcpus):
 def check_isolcpus_cpuset(cpulist):
 	Log.header("ISOLCPUS / CPUSET AND NOHZ_FULL")
 
+	# the applied mask can differ from the requested one: CPU0 is always kept
+	# as housekeeping and the mask is clamped to CONFIG_NR_CPUS
+	effective = read_cpulist("/sys/devices/system/cpu/nohz_full")
+	requested = expand_cpu_spec(get_cmdline_param("nohz_full"))
+
+	if not effective:
+		Log.print(Log.Status.FAIL, "NOHZ_FULL_MASK",
+				  "/sys/devices/system/cpu/nohz_full is empty: full dynticks is NOT active")
+	else:
+		Log.print(Log.Status.INFO, "NOHZ_FULL_MASK", f"Effective nohz_full: {fmt_cpus(effective)}")
+
+	if requested is None:
+		Log.print(Log.Status.WARN, "NOHZ_FULL_CMDLINE", "No nohz_full= found in /proc/cmdline")
+	elif effective and sorted(requested) != sorted(effective):
+		dropped = sorted(set(requested) - set(effective))
+		Log.print(Log.Status.FAIL, "NOHZ_FULL_MISMATCH",
+				  f"cmdline nohz_full={fmt_cpus(requested)} but kernel applied "
+				  f"{fmt_cpus(effective)} | dropped: {fmt_cpus(dropped)}")
+
+	isolated = read_cpulist("/sys/devices/system/cpu/isolated")
+	Log.print(Log.Status.INFO, "ISOLATED_MASK", f"/sys/devices/system/cpu/isolated: {fmt_cpus(isolated)}")
+
+	if not cpulist:
+		return
+
+	if 0 in cpulist:
+		Log.print(Log.Status.FAIL, "CPU0_NOHZ_FULL",
+				  "CPU0 is in the nohz_full list. The kernel always keeps CPU0 as housekeeping.")
+
+	online = get_online_cpus()
+	if not online:
+		return
+
+	not_online = sorted(set(cpulist) - set(online))
+	if not_online:
+		Log.print(Log.Status.WARN, "NOHZ_FULL_OFFLINE", f"nohz_full CPUs not online: {fmt_cpus(not_online)}")
+
+
 	isolcpus = get_cmdline_param("isolcpus")
 	if isolcpus is not None:
 		check_isolcpus(cpulist, isolcpus)
@@ -984,7 +947,6 @@ def check_configs(cpulist):
 	# the isolation check must run regardless of SMT: it is the most important
 	# one and SMT is expected to be *disabled* on a tuned nohz_full machine
 	check_isolcpus_cpuset(cpulist)
-	check_nohz_full_mask(cpulist)
 
 	Log.header("CPU TOPOLOGY / SMT")
 	smt = is_smt_enabled()

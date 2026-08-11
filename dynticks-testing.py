@@ -108,6 +108,8 @@ try:
 
 		user_loops.append(p)
 
+	print("Enable trace and sleep for %s seconds" % TRACE_DURATION_S);
+
 	# Trace, starting from an empty buffer
 	trace_file_write("tracing_on", "0")
 	trace_file_write("trace", "")
