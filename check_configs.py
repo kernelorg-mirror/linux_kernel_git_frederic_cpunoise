@@ -169,7 +169,6 @@ def get_thread_siblings_list():
 		if not siblings:
 			continue
 
-		# avoid checking same CPUs
 		seen_cpus.update(siblings)
 		thread_siblings_list[cpu] = siblings
 
@@ -317,7 +316,6 @@ def get_irq_nohzfull_intersect(cpulist, attr="smp_affinity_list"):
 		if not os.path.isdir(path) or vec == "0":
 			continue
 
-		# Be sure IRQ affinity isn't set for nohz CPUs
 		cpus = intersect(read_cpulist(os.path.join(path, attr)), cpulist)
 		if cpus:
 			smp_list[frozenset(cpus)].add(vec)
@@ -607,31 +605,6 @@ def check_thp():
 	else:
 		Log.print(Log.Status.OK, "TRANSPARENT_HUGEPAGE", f"transparent_hugepage={thp}. Ok!")
 
-def get_systemd_cpu_affinity():
-	paths = ["/etc/systemd/system.conf"]
-	dropin_dir = "/etc/systemd/system.conf.d"
-
-	if os.path.isdir(dropin_dir):
-		paths += [os.path.join(dropin_dir, e) for e in sorted(os.listdir(dropin_dir))
-				  if e.endswith(".conf")]
-
-	affinity = None
-	source = None
-
-	for path in paths:
-		data = read_file(path)
-		if data is None:
-			continue
-
-		for s in re.finditer(r'^\s*CPUAffinity\s*=\s*([^\n#]+)', data, re.M):
-			# systemd accepts both a list and a whitespace separated set
-			cpus = safe_parse_cpulist(s.group(1).strip().replace(" ", ","))
-			if cpus:
-				affinity = cpus
-				source = path
-
-	return affinity, source
-
 def check_net_rps_xps(cpulist):
 	Log.header("NETWORK RPS / XPS")
 
@@ -736,7 +709,6 @@ def check_cpuset_v2(cpulist):
 
 		partition_state = read_file(os.path.join(root, "cpuset.cpus.partition"))
 
-		# we're only interested in isolated partition here
 		if partition_state is None or not partition_state.startswith("isolated"):
 			continue
 
@@ -763,7 +735,6 @@ def check_cpuset_v2(cpulist):
 		Log.print(Log.Status.OK, "CPUSET_MATCH",
 				  f"cpuset: {fmt_cpus(cgroup_cpus)} | isolating nohz_full CPUs: {fmt_cpus(mine)}. Ok!")
 
-		# CFS should not be present
 		is_quota_valid, quota_str = is_cfs_quota_valid(root)
 		Log.print(is_quota_valid, "CFS_QUOTA", f"CFS Quota: {quota_str}")
 
@@ -965,4 +936,4 @@ def check_configs(cpulist):
 	check_noise_knobs(cpulist)
 	check_net_rps_xps(cpulist)
 
-	print(" ");
+	print()

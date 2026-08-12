@@ -50,7 +50,6 @@ if not nohz_full:
 
 print("nohz_full=%s" % to_str_range(nohz_full))
 
-# Return the set of CPUs the calling thread of the current process is restricted to
 allowed_cpus = os.sched_getaffinity(0)
 
 vector_affinity = {}
@@ -81,7 +80,6 @@ user_loops = []
 
 # from here on the IRQ affinity is clobbered and the busy loops are spinning
 try:
-	# Spawn one busy loop per isolated CPU
 	for cpu in nohz_full:
 		cgroup = None if cpu in allowed_cpus else find_isolated_partition(cpu)
 		if cgroup is not None:
@@ -101,7 +99,7 @@ try:
 
 		user_loops.append(p)
 
-	print("Enable trace and sleep for %s seconds" % TRACE_DURATION_S);
+	print("Enable trace and sleep for %s seconds" % TRACE_DURATION_S)
 
 	# Trace, starting from an empty buffer
 	trace_file_write("tracing_on", "0")

@@ -472,7 +472,6 @@ def softirq_entry(line, task, cpu, ts):
 		return False
 	vec = s.group(1)
 	n = SoftirqNoise(ts, vec)
-	#n.complete(ts)
 	task.push_noise(n)
 
 	return True
@@ -496,7 +495,6 @@ def irq_work_entry(line, task, cpu, ts):
 		sys.exit(-1)
 		return False
 	n = IrqWorkNoise(ts)
-	#n.complete(ts)
 	task.push_noise(n)
 
 	return True
@@ -508,7 +506,6 @@ def page_fault_user(line, task, cpu, ts):
 		sys.exit(-1)
 		return False
 	n = PageFaultNoise(ts)
-	#n.complete(ts)
 	task.push_noise(n)
 
 	return True
@@ -520,7 +517,6 @@ def reschedule_entry(line, task, cpu, ts):
 		sys.exit(-1)
 		return False
 	n = ReschedVecNoise(ts)
-	#n.complete(ts)
 	task.push_noise(n)
 
 	return True
@@ -532,7 +528,6 @@ def page_fault_kernel(line, task, cpu, ts):
 		sys.exit(-1)
 		return False
 	n = PageFaultNoise(ts)
-	#n.complete(ts)
 	task.push_noise(n)
 	
 	return True
@@ -544,7 +539,6 @@ def local_timer_entry(line, task, cpu, ts):
 		sys.exit(-1)
 		return False
 	n = LocalTimerNoise(ts)
-	#n.complete(ts)
 	task.push_noise(n)
 
 	return True
@@ -557,7 +551,6 @@ def csd_function_entry(line, task, cpu, ts):
 		return False
 	func = s.group(1)
 	n = CsdNoise(ts, func)
-	#n.complete(ts)
 	task.push_noise(n)
 
 	return True
@@ -582,7 +575,6 @@ def timer_expire_entry(line, task, cpu, ts):
 		return False
 	timer = s.group(1)
 	n = TimerNoise(ts, timer)
-	#n.complete(ts)
 	task.push_noise(n)
 
 	return True
@@ -599,7 +591,6 @@ def hrtimer_expire_entry(line, task, cpu, ts):
 		return False
 	timer = s.group(1)
 	n = TimerNoise(ts, timer)
-	#n.complete(ts)
 	task.push_noise(n)
 
 	return True
@@ -612,7 +603,6 @@ def workqueue_execute_start(line, task, cpu, ts):
 		return False
 	work = s.group(1)
 	n = WorkqueueNoise(ts, work)
-	#n.complete(ts)
 	task.push_noise(n)
 
 	return True
@@ -625,7 +615,6 @@ def workqueue_execute_end(line, task, cpu, ts):
 		return False
 	work = s.group(1)
 	n = WorkqueueNoise(ts, work)
-	#n.complete(ts)
 	task.pop_noise_match_exit(ts, n)
 
 	return True
@@ -636,7 +625,6 @@ def syscall_enter(line, task, cpu, ts):
 		return False
 	name = s.group(1)
 	n = SyscallNoise(ts, name)
-	#n.complete(ts)
 	task.push_noise(n)
 	return True
 
@@ -646,7 +634,6 @@ def syscall_exit(line, task, cpu, ts):
 		return False
 	name = s.group(1)
 	n = SyscallNoise(ts, name)
-	#n.complete(ts)
 	task.pop_noise_match_exit(ts, n)
 
 	return True
@@ -670,9 +657,7 @@ def unhandled_event(line, task, cpu, ts):
 
 	return True
 
-"""""""""""""""""
- CMD-LINE PARSER
-"""""""""""""""""
+# CMD-LINE PARSER
 def parse_arguments():
 	parser = OptionParser(usage="usage: %prog [options] trace_file")
 
@@ -743,9 +728,7 @@ def cpulist_callback(option, opt, value, parser):
 	global cpulist
 	cpulist = parse_cpulist(value)
 
-"""""""""""""""""
- / CMD-LINE PARSER
-"""""""""""""""""
+# / CMD-LINE PARSER
 
 events = [
 	("tick_stop:", tick_stop),
@@ -780,13 +763,9 @@ if cpulist is None:
 	print("INFO: --cpulist param. not set: reading nohz_full from sysfs")
 	cpulist = get_nohz_full_cpus()
 
-
-# Check system configurations...
-# (smt, irq affinity, siblings thread, governor,...)
 if options.skip_config is False:
 	check_configs(cpulist)
 
-# Exit if only_configs is present
 if options.only_configs:
 	exit(0)
 
@@ -804,7 +783,6 @@ while True:
 		break
 	cursor += float(len(line))
 	sys.stderr.write("Processing %f%%\r" % (cursor / fsize * 100))
-	#sys.stderr.write("Processing line: %d\r" % nr)
 	nr += 1
 	s = TRACE_REG.match(line)
 	if s is not None:
@@ -826,7 +804,6 @@ while True:
 			if rest.startswith(e[0]):
 				if e[1](rest, task, cpu, ts):
 					break
-		#print("%s %d %d %d" % (comm, pid, cpu, ts))
 
 tasklist = [i[1] for i in taskdict.items()]
 
@@ -836,16 +813,7 @@ for t in tasklist:
 print("Unhandled events: %s" % ",".join(unhandled_events))
 print()
 
-#tasklist_sorted = sorted(tasklist, key = lambda t : t.nr_hists, reverse = True)
-def sort_duration(t):
-	total = 0
-	for h in t.hists:
-		total += sum(h.duration_list)
-	return total
-
 tasklist_sorted = sorted(tasklist, key = lambda t : t.noise_duration, reverse = True)
-#tasklist_sorted = sorted(tasklist, key = sort_duration, reverse = True)
-#sorted(tasklist, key = lambda t : t.nr_hists, reverse = True)
 
 for t in tasklist_sorted:
 	if t.nr_hists == 0:
@@ -854,8 +822,6 @@ for t in tasklist_sorted:
 	if task_matches_filters(t.comm, t.pid, options.exact_tasks, options.pid_tasks) == False:
 		continue
 
-	#t.hists = sorted(t.hists, key = lambda h : h.nr_noise, reverse = True)
-	#t.hists = sorted(t.hists, key = lambda h : sum(h.duration_list), reverse = True)
 	t.hists = sorted(t.hists, key = lambda h : sum(h.duration_list), reverse = True)
 	print(t)
 	total_duration = 0
@@ -867,15 +833,6 @@ for t in tasklist_sorted:
 			duration = sum(h.duration_list)
 			print("\tDuration:{: >12}".format(duration))
 			total_duration += duration
-		#print("Nr: %d\n" % len(h.noise_list))
 	print()
 	print("\t%s%s" % (" " * 46, "Total: {: >6}".format(t.nr_hists)), end = "")
 	print("\tTotal: {: >14}\n".format(t.noise_duration))
-"""
-for snap in sorted(Snaps):
-	for e in Snaps[snap]:
-		(ts, pid, waketime) = e
-		print("Lat: %d of %s:%d switch at %d wake at %d" % (snap, Tasks[pid].comm, pid, ts, waketime))
-
-print("Total: %d Avg: %d Stdev: %d" % (sum(Delays), statistics.mean(Delays), statistics.stdev(Delays)))
-"""
