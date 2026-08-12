@@ -175,23 +175,20 @@ def get_thread_siblings_list():
 
 	return thread_siblings_list
 
-def is_smt_enabled():
+def check_siblings_thread(cpulist):
+	Log.header("SIBLINGS THREAD <=> NOHZ_FULL")
+	
 	smt_path = "/sys/devices/system/cpu/smt/active"
 	smt = read_int(smt_path)
 
 	if smt is None:
 		Log.print(Log.Status.FAIL, "SMT_CHECK", f"Can't find {smt_path}")
-		return 0
+		return
 
 	if smt:
 		Log.print(Log.Status.WARN, "SMT_CHECK", "SMT is enabled. On nohz_full with isolated CPU it should be disabled.")
 	else:
 		Log.print(Log.Status.OK, "SMT_CHECK", "SMT is disabled.")
-
-	return smt
-
-def check_siblings_thread(cpulist):
-	Log.header("SIBLINGS THREAD <=> NOHZ_FULL")
 	Log.print(Log.Status.INFO, "SMT_NOISE", "Non-isolated cores can cause noise. If both are isolated, they can interfere.")
 
 	siblings_list = get_thread_siblings_list()
@@ -958,11 +955,7 @@ def check_configs(cpulist):
 	# the isolation check must run regardless of SMT: it is the most important
 	# one and SMT is expected to be *disabled* on a tuned nohz_full machine
 	check_isolcpus_cpuset(cpulist)
-
-	smt = is_smt_enabled()
-	if smt:
-		check_siblings_thread(cpulist)
-
+	check_siblings_thread(cpulist)
 	check_cpu_governor(cpulist)
 	check_irq_affinity(cpulist)
 	check_irqbalance(cpulist)
