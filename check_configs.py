@@ -3,7 +3,8 @@
 import os, re, sys, gzip
 from collections import defaultdict
 from dynticks_testing_lib import (parse_cpulist, get_cmdline_param, read_file,
-								  read_int, read_cpulist, safe_parse_cpulist)
+								  read_int, read_cpulist, safe_parse_cpulist,
+								  get_nohz_full_cpus)
 from log_output import Log
 
 # max number of items (IRQ vectors, workqueues, ...) listed in a single message
@@ -137,10 +138,6 @@ def get_kernel_config():
 		_kernel_config[key] = value.strip('"')
 
 	return _kernel_config
-
-def check_nohz_full_mask(cpulist):
-	Log.header("NOHZ_FULL / ISOLATION MASK")
-
 
 REQUIRED_CONFIGS = [
 	("CONFIG_NO_HZ_FULL", "full dynticks support"),
@@ -868,13 +865,27 @@ def check_isolcpus(cpulist, isolcpus):
 	else:
 		Log.print(Log.Status.OK, "ISOLCPUS_MATCH", "nohz_full is part of isolcpus. Ok!")
 
+# nohz_full= and isolcpus=nohz,<list> are equivalent ways to request full
+# dynticks: either is authoritative, nohz_full= takes precedence if both are set
+def get_requested_nohz_full():
+	requested = get_cmdline_param("nohz_full")
+	if requested is not None:
+		return expand_cpu_spec(requested)
+
+	isolcpus = get_cmdline_param("isolcpus")
+	if isolcpus is None:
+		return None
+
+	flags, cpus = split_isolcpus(isolcpus)
+	return cpus if "nohz" in flags else None
+
 def check_isolcpus_cpuset(cpulist):
 	Log.header("ISOLCPUS / CPUSET AND NOHZ_FULL")
 
 	# the applied mask can differ from the requested one: CPU0 is always kept
 	# as housekeeping and the mask is clamped to CONFIG_NR_CPUS
-	effective = read_cpulist("/sys/devices/system/cpu/nohz_full")
-	requested = expand_cpu_spec(get_cmdline_param("nohz_full"))
+	effective = get_nohz_full_cpus()
+	requested = get_requested_nohz_full()
 
 	if not effective:
 		Log.print(Log.Status.FAIL, "NOHZ_FULL_MASK",
@@ -883,7 +894,8 @@ def check_isolcpus_cpuset(cpulist):
 		Log.print(Log.Status.INFO, "NOHZ_FULL_MASK", f"Effective nohz_full: {fmt_cpus(effective)}")
 
 	if requested is None:
-		Log.print(Log.Status.WARN, "NOHZ_FULL_CMDLINE", "No nohz_full= found in /proc/cmdline")
+		Log.print(Log.Status.WARN, "NOHZ_FULL_CMDLINE",
+				  "No nohz_full= or isolcpus=nohz found in /proc/cmdline")
 	elif effective and sorted(requested) != sorted(effective):
 		dropped = sorted(set(requested) - set(effective))
 		Log.print(Log.Status.FAIL, "NOHZ_FULL_MISMATCH",
@@ -927,16 +939,15 @@ def check_isolcpus_cpuset(cpulist):
 		Log.print(Log.Status.WARN, "CGROUP_VERSION", "No cgroup hierarchy found under /sys/fs/cgroup")
 		covered = set()
 
-	# the single partitions have been reported above: the nohz_full CPUs can be
-	# spread over several of them, so the verdict is on their union
-	if not covered:
-		Log.print(Log.Status.FAIL, "CPUSET_MISSING",
-				  f"nohz_full specified {fmt_cpus(cpulist)} but no isolated partitions (isolcpus | cpusets) found!")
-	elif set(cpulist) - covered:
-		err_nohz_isolated(cpulist, sorted(covered))
-	else:
-		Log.print(Log.Status.OK, "CPUSET_MATCH",
-				  f"every nohz_full CPU ({fmt_cpus(cpulist)}) is in an isolated partition. Ok!")
+	if isolcpus is None:
+		if not covered:
+			Log.print(Log.Status.FAIL, "CPUSET_MISSING",
+					  f"nohz_full specified {fmt_cpus(cpulist)} but no isolated partitions (isolcpus | cpusets) found!")
+		elif set(cpulist) - covered:
+			err_nohz_isolated(cpulist, sorted(covered))
+		else:
+			Log.print(Log.Status.OK, "CPUSET_MATCH",
+					  f"every nohz_full CPU ({fmt_cpus(cpulist)}) is in an isolated partition. Ok!")
 
 def check_configs(cpulist):
 	if not cpulist:
@@ -948,8 +959,9 @@ def check_configs(cpulist):
 	# one and SMT is expected to be *disabled* on a tuned nohz_full machine
 	check_isolcpus_cpuset(cpulist)
 
-	Log.header("CPU TOPOLOGY / SMT")
 	smt = is_smt_enabled()
+	if smt:
+		check_siblings_thread(cpulist)
 
 	check_cpu_governor(cpulist)
 	check_irq_affinity(cpulist)
@@ -960,5 +972,4 @@ def check_configs(cpulist):
 	check_noise_knobs(cpulist)
 	check_net_rps_xps(cpulist)
 
-	if smt:
-		check_siblings_thread(cpulist)
+	print(" ");

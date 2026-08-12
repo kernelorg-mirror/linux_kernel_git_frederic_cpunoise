@@ -3,8 +3,8 @@
 import re, sys, statistics , os
 from optparse import OptionParser
 from collections import defaultdict
-from dynticks_testing_lib import parse_cpulist, get_cmdline_param
-from check_configs_lib import check_configs
+from dynticks_testing_lib import parse_cpulist, get_nohz_full_cpus
+from check_configs import check_configs
 
 class Noise:
 	def __init__(self, ts):
@@ -774,12 +774,11 @@ nr = 0
 
 (options, trace_file) = parse_arguments()
 
-# if --cpulist is not set, read nohz_full
+# if --cpulist is not set, read the nohz_full CPUs from sysfs: this covers
+# both nohz_full= and the equivalent isolcpus=nohz,<list> boot parameter
 if cpulist is None:
-	print("INFO: --cpulist param. not set: reading nohz_full from /proc/cmdline")
-	nohz_list = get_cmdline_param("nohz_full")
-	if nohz_list:
-		cpulist = parse_cpulist(nohz_list)
+	print("INFO: --cpulist param. not set: reading nohz_full from sysfs")
+	cpulist = get_nohz_full_cpus()
 
 
 # Check system configurations...

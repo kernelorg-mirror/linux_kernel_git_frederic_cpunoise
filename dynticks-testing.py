@@ -1,11 +1,10 @@
 #!/usr/bin/python3
 
-from dynticks_testing_lib import (parse_cpulist, read_file, find_isolated_partition,
-								  cgroup_attach, to_str_range)
+from dynticks_testing_lib import (read_file, find_isolated_partition,
+								  cgroup_attach, to_str_range, get_nohz_full_cpus)
 import os, sys, subprocess, time
 
 TRACING_PATH = "/sys/kernel/tracing"
-NOHZ_FULL_PATH = "/sys/devices/system/cpu/nohz_full"
 
 # how long the user loops are left spinning while the trace is collected
 TRACE_DURATION_S = 10
@@ -43,19 +42,13 @@ def restore_irq_affinity(vector_affinity):
 		except OSError:
 			pass
 
-# Parse nohz_full=
-cpulist = read_file(NOHZ_FULL_PATH)
-if cpulist is None:
-	print("Can't find %s" % NOHZ_FULL_PATH)
-	sys.exit(-1)
-
-if cpulist in ("(null)", ""):
+# nohz_full CPUs, however they were requested (nohz_full= or isolcpus=nohz)
+nohz_full = get_nohz_full_cpus()
+if not nohz_full:
 	print("nohz_full= not set ?")
 	sys.exit(-1)
 
-print("nohz_full=%s" % cpulist)
-
-nohz_full = parse_cpulist(cpulist)
+print("nohz_full=%s" % to_str_range(nohz_full))
 
 # Return the set of CPUs the calling thread of the current process is restricted to
 allowed_cpus = os.sched_getaffinity(0)

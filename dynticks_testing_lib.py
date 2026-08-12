@@ -4,6 +4,7 @@ import os, re
 from itertools import groupby
 
 CGROUP_ROOT = "/sys/fs/cgroup"
+NOHZ_FULL_PATH = "/sys/devices/system/cpu/nohz_full"
 
 def parse_cpulist(s):
 	cpulist = []
@@ -64,6 +65,12 @@ def read_cpulist(path):
 		return []
 
 	return safe_parse_cpulist(value) or []
+
+# The single source of truth for "which CPUs are running full dynticks": the
+# kernel populates this file the same way whether it was requested via
+# nohz_full= or via the equivalent isolcpus=nohz,<list> flag.
+def get_nohz_full_cpus():
+	return read_cpulist(NOHZ_FULL_PATH)
 
 # Return the cgroup v2 isolated partition owning 'cpu', or None
 def find_isolated_partition(cpu):
