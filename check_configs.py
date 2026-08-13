@@ -4,7 +4,7 @@ import os, re, sys, gzip
 from collections import defaultdict
 from dynticks_testing_lib import (parse_cpulist, get_cmdline_param, read_file,
 								  read_int, read_cpulist, safe_parse_cpulist,
-								  get_nohz_full_cpus)
+								  get_nohz_full_cpus,to_str_range)
 from log_output import Log
 
 # max number of items (IRQ vectors, workqueues, ...) listed in a single message
@@ -60,12 +60,6 @@ def has_cmdline_flag(flag):
 
 def get_online_cpus():
 	return read_cpulist("/sys/devices/system/cpu/online")
-
-def fmt_cpus(cpus):
-	if not cpus:
-		return "(none)"
-
-	return ",".join(str(c) for c in sorted(cpus))
 
 def intersect(a, b):
 	return sorted(set(a) & set(b))
@@ -223,10 +217,15 @@ def check_cpu_governor(cpulist):
 
 	if missing:
 		Log.print(Log.Status.WARN, "CPU_GOVERNOR",
-				  f"No cpufreq sysfs for CPUs {fmt_cpus(missing)} (driver missing or BIOS controlled)")
+				  f"No cpufreq sysfs for CPUs {to_str_range(missing)} (driver missing or BIOS controlled)")
 
 	for governor, gov_cpus in governors.items():
-		Log.print(Log.Status.INFO, "CPU_GOVERNOR", f"CPUs {fmt_cpus(gov_cpus)}: governor '{governor}'")
+		Log.print(Log.Status.INFO, "CPU_GOVERNOR", f"CPUs {to_str_range(gov_cpus)}: governor '{governor}'")
+
+		if governor != "performance":
+			Log.print(Log.Status.WARN, "CPU_GOVERNOR_POLICY",
+					  f"CPUs {to_str_range(gov_cpus)}: governor '{governor}' allows frequency "
+					  "transitions, a jitter source. 'performance' is recommended.")
 
 	if len(governors) > 1:
 		Log.print(Log.Status.WARN, "CPU_GOVERNOR_MIX", "nohz_full CPUs do not share the same governor")
@@ -234,7 +233,31 @@ def check_cpu_governor(cpulist):
 	if drivers:
 		Log.print(Log.Status.INFO, "CPU_FREQ_DRIVER", f"scaling driver: {', '.join(sorted(drivers))}")
 
+	check_turbo_boost()
 	check_cpu_idle(cpus)
+
+# no_turbo and boost use opposite polarity: no_turbo=1 means turbo is OFF,
+# boost=1 means it's ON. Only one of the two exists, depending on the driver.
+def check_turbo_boost():
+	no_turbo = read_int("/sys/devices/system/cpu/intel_pstate/no_turbo")
+	if no_turbo is not None:
+		if no_turbo:
+			Log.print(Log.Status.OK, "CPU_TURBO", "intel_pstate/no_turbo=1: turbo disabled. Ok!")
+		else:
+			Log.print(Log.Status.WARN, "CPU_TURBO",
+					  "intel_pstate/no_turbo=0: turbo boost is enabled, a source of "
+					  "frequency-transition jitter.")
+		return
+
+	boost = read_int("/sys/devices/system/cpu/cpufreq/boost")
+	if boost is None:
+		return
+
+	if boost:
+		Log.print(Log.Status.WARN, "CPU_TURBO",
+				  "cpufreq/boost=1: turbo boost is enabled, a source of frequency-transition jitter.")
+	else:
+		Log.print(Log.Status.OK, "CPU_TURBO", "cpufreq/boost=0: turbo disabled. Ok!")
 
 def get_cpu_idle_states(cpu):
 	path = f"/sys/devices/system/cpu/cpu{cpu}/cpuidle"
@@ -275,7 +298,7 @@ def check_cpu_idle(cpus):
 		too_deep = deepest > CSTATE_LATENCY_WARN_US
 
 		status = Log.Status.WARN if too_deep else Log.Status.INFO
-		Log.print(status, "CPU_IDLE_STATES", f"CPUs {fmt_cpus(state_cpus)}: enabled C-states: {desc}")
+		Log.print(status, "CPU_IDLE_STATES", f"CPUs {to_str_range(state_cpus)}: enabled C-states: {desc}")
 
 		if too_deep:
 			Log.print(Log.Status.WARN, "CPU_IDLE_LATENCY",
@@ -329,7 +352,7 @@ def check_irq_affinity(cpulist):
 
 	for cpus, vectors in smp_list.items():
 		Log.print(Log.Status.FAIL, "IRQ_AFFINITY",
-				  f"NOHZ CPUS {fmt_cpus(cpus)} not isolated from IRQs: {describe_vectors(vectors)}")
+				  f"NOHZ CPUS {to_str_range(cpus)} not isolated from IRQs: {describe_vectors(vectors)}")
 
 	# smp_affinity_list is only the *requested* mask: managed interrupts
 	# (per-queue NVMe/NIC vectors) ignore it, so they look clean there while
@@ -344,17 +367,30 @@ def check_irq_affinity(cpulist):
 
 	for cpus, vectors in managed.items():
 		Log.print(Log.Status.FAIL, "IRQ_EFFECTIVE",
-				  f"NOHZ CPUS {fmt_cpus(cpus)} are the effective target of IRQs: {describe_vectors(vectors)}")
+				  f"NOHZ CPUS {to_str_range(cpus)} are the effective target of IRQs: {to_str_range(vectors)}")
 
 	if managed:
 		Log.print(Log.Status.INFO, "IRQ_EFFECTIVE_HINT",
 				  "These are likely managed IRQs: they ignore smp_affinity_list. "
 				  "Use isolcpus=managed_irq to keep them off the isolated CPUs.")
 
-	default_affinity = intersect(read_cpumask("/proc/irq/default_smp_affinity"), cpulist)
+	default_mask = read_cpumask("/proc/irq/default_smp_affinity")
+	default_affinity = intersect(default_mask, cpulist)
+
+	# irqaffinity= is the boot-time request; default_smp_affinity is the
+	# runtime state it should have produced
+	irqaffinity = get_cmdline_param("irqaffinity")
+	if irqaffinity is not None:
+		requested = safe_parse_cpulist(irqaffinity)
+		Log.print(Log.Status.INFO, "IRQAFFINITY_CMDLINE", f"irqaffinity={to_str_range(requested)} in /proc/cmdline")
+		if requested is not None and default_mask and sorted(requested) != sorted(default_mask):
+			Log.print(Log.Status.WARN, "IRQAFFINITY_MISMATCH",
+					  f"cmdline irqaffinity={to_str_range(requested)} but /proc/irq/default_smp_affinity="
+					  f"{to_str_range(default_mask)}")
+
 	if default_affinity:
 		Log.print(Log.Status.WARN, "IRQ_DEFAULT_AFFINITY",
-				  f"/proc/irq/default_smp_affinity includes nohz_full CPUs {fmt_cpus(default_affinity)}: "
+				  f"/proc/irq/default_smp_affinity includes nohz_full CPUs {to_str_range(default_affinity)}: "
 				  "new IRQs will be allowed on them")
 
 	if not smp_list and not managed and not default_affinity:
@@ -407,7 +443,7 @@ def check_irqbalance(cpulist):
 	missing = sorted(set(cpulist) - set(banned))
 	if missing:
 		Log.print(Log.Status.FAIL, "IRQBALANCE_BANNED",
-				  f"{path}: nohz_full CPUs {fmt_cpus(missing)} are NOT banned from irqbalance")
+				  f"{path}: nohz_full CPUs {to_str_range(missing)} are NOT banned from irqbalance")
 	else:
 		Log.print(Log.Status.OK, "IRQBALANCE_BANNED",
 				  f"{path}: all nohz_full CPUs are banned from irqbalance. Ok!")
@@ -419,7 +455,7 @@ def check_rcu_nocbs(cpulist):
 	nocbs = expand_cpu_spec(get_cmdline_param("rcu_nocbs"))
 
 	if nocbs is not None:
-		Log.print(Log.Status.INFO, "RCU_NOCBS", f"rcu_nocbs={fmt_cpus(nocbs)}")
+		Log.print(Log.Status.INFO, "RCU_NOCBS", f"rcu_nocbs={to_str_range(nocbs)}")
 	elif default_all:
 		nocbs = get_online_cpus()
 		Log.print(Log.Status.INFO, "RCU_NOCBS",
@@ -434,7 +470,7 @@ def check_rcu_nocbs(cpulist):
 		missing = sorted(set(cpulist) - set(nocbs))
 		if missing:
 			Log.print(Log.Status.FAIL, "RCU_NOCBS_COVERAGE",
-					  f"nohz_full CPUs {fmt_cpus(missing)} are NOT in rcu_nocbs: RCU callbacks "
+					  f"nohz_full CPUs {to_str_range(missing)} are NOT in rcu_nocbs: RCU callbacks "
 					  "will run there and keep the tick alive.")
 		else:
 			Log.print(Log.Status.OK, "RCU_NOCBS_COVERAGE", "All nohz_full CPUs offload RCU callbacks. Ok!")
@@ -464,7 +500,7 @@ def check_rcu_nocbs(cpulist):
 
 	for cpus, comms in offenders.items():
 		Log.print(Log.Status.FAIL, "RCU_OFFLOAD_AFFINITY",
-				  f"RCU offload kthreads can run on nohz_full CPUs {fmt_cpus(cpus)}: {truncate(sorted(comms))}")
+				  f"RCU offload kthreads can run on nohz_full CPUs {to_str_range(cpus)}: {truncate(sorted(comms))}")
 
 	if not offenders:
 		Log.print(Log.Status.OK, "RCU_OFFLOAD_AFFINITY",
@@ -480,11 +516,11 @@ def check_workqueue_affinity(cpulist):
 
 		if missing:
 			Log.print(Log.Status.WARN, "WQ_CPUMASK_ISOLATED",
-					  f"nohz_full CPUs {fmt_cpus(missing)} are not in cpumask_isolated. "
+					  f"nohz_full CPUs {to_str_range(missing)} are not in cpumask_isolated. "
 					  "Use isolcpus=domain or workqueue.unbound_cpus= to exclude them.")
 		else:
 			Log.print(Log.Status.OK, "WQ_CPUMASK_ISOLATED",
-					  f"Workqueue isolated cpumask: {fmt_cpus(wq_isolated)}")
+					  f"Workqueue isolated cpumask: {to_str_range(wq_isolated)}")
 
 def check_watchdog(cpulist):
 	Log.header("WATCHDOG")
@@ -508,9 +544,18 @@ def check_watchdog(cpulist):
 		return
 
 	# the watchdog arms a per-CPU hrtimer and wakes the watchdog/N kthread: a
-	# guaranteed periodic tick source on every CPU it covers
+	# guaranteed periodic tick source on every CPU it covers. It defaults to
+	# the housekeeping CPUs, but the sysctl can be widened back to include
+	# the isolated ones.
 	cpumask = read_cpulist("/proc/sys/kernel/watchdog_cpumask")
 	cpus = intersect(cpumask, cpulist)
+
+	if cpus:
+		Log.print(Log.Status.WARN, "WATCHDOG_CPUMASK",
+				  f"watchdog_cpumask includes nohz_full CPUs {to_str_range(cpus)}: the "
+				  "soft-lockup hrtimer will keep ticking there")
+	else:
+		Log.print(Log.Status.OK, "WATCHDOG_CPUMASK", "watchdog_cpumask excludes the nohz_full CPUs. Ok!")
 
 def check_noise_knobs(cpulist):
 	Log.header("KERNEL NOISE KNOBS")
@@ -565,7 +610,7 @@ def check_mce(cpulist):
 
 	for interval, cpus in offenders.items():
 		Log.print(Log.Status.WARN, "MCE_CHECK_INTERVAL",
-				  f"CPUs {fmt_cpus(cpus)}: machine check poll timer every {interval}s. "
+				  f"CPUs {to_str_range(cpus)}: machine check poll timer every {interval}s. "
 				  "Set check_interval to 0 on the isolated CPUs.")
 
 	if not offenders:
@@ -605,6 +650,19 @@ def check_thp():
 	else:
 		Log.print(Log.Status.OK, "TRANSPARENT_HUGEPAGE", f"transparent_hugepage={thp}. Ok!")
 
+	# unlike 'enabled', 'always' here defrags synchronously in the fault path
+	# itself: a much sharper stall than khugepaged's asynchronous background work
+	defrag = read_file("/sys/kernel/mm/transparent_hugepage/defrag")
+	if defrag is None:
+		return
+
+	if "[always]" in defrag:
+		Log.print(Log.Status.WARN, "THP_DEFRAG",
+				  f"transparent_hugepage/defrag={defrag}: page faults can trigger "
+				  "synchronous compaction. 'madvise' or 'never' is recommended.")
+	else:
+		Log.print(Log.Status.OK, "THP_DEFRAG", f"transparent_hugepage/defrag={defrag}. Ok!")
+
 def check_net_rps_xps(cpulist):
 	Log.header("NETWORK RPS / XPS")
 
@@ -633,7 +691,7 @@ def check_net_rps_xps(cpulist):
 
 	for (iface, mask_file, cpus), queues in offenders.items():
 		Log.print(Log.Status.WARN, "NET_%s" % mask_file.upper(),
-				  f"{iface}: {mask_file} steers packets to nohz_full CPUs {fmt_cpus(cpus)} "
+				  f"{iface}: {mask_file} steers packets to nohz_full CPUs {to_str_range(cpus)} "
 				  f"({len(queues)} queue(s))")
 
 	if not offenders:
@@ -725,7 +783,7 @@ def check_cpuset_v2(cpulist):
 		if partition_state.startswith("isolated invalid"):
 			Log.print(Log.Status.FAIL, "CGROUP_PARTITION", f"Path: {root} | State: {partition_state}")
 			Log.print(Log.Status.FAIL, "CPUSET_MATCH",
-					  f"cpuset: {fmt_cpus(cgroup_cpus)} | nohz_full CPUs {fmt_cpus(mine)} are NOT "
+					  f"cpuset: {to_str_range(cgroup_cpus)} | nohz_full CPUs {to_str_range(mine)} are NOT "
 					  "isolated: the partition did not take effect")
 			continue
 
@@ -733,7 +791,7 @@ def check_cpuset_v2(cpulist):
 
 		Log.print(Log.Status.OK, "CGROUP_PARTITION", f"Path: {root} | State: {partition_state}")
 		Log.print(Log.Status.OK, "CPUSET_MATCH",
-				  f"cpuset: {fmt_cpus(cgroup_cpus)} | isolating nohz_full CPUs: {fmt_cpus(mine)}. Ok!")
+				  f"cpuset: {to_str_range(cgroup_cpus)} | isolating nohz_full CPUs: {to_str_range(mine)}. Ok!")
 
 		is_quota_valid, quota_str = is_cfs_quota_valid(root)
 		Log.print(is_quota_valid, "CFS_QUOTA", f"CFS Quota: {quota_str}")
@@ -779,8 +837,8 @@ def check_cpuset_v1(cpulist):
 		covered.update(mine)
 
 		Log.print(Log.Status.OK, "CPUSET_V1_PARTITION",
-				  f"Path: {root} | cpus: {fmt_cpus(cgroup_cpus)} | isolating nohz_full CPUs: "
-				  f"{fmt_cpus(mine)} | sched_load_balance=0. Ok!")
+				  f"Path: {root} | cpus: {to_str_range(cgroup_cpus)} | isolating nohz_full CPUs: "
+				  f"{to_str_range(mine)} | sched_load_balance=0. Ok!")
 
 		# the CFS quota lives in the cpu controller hierarchy on v1
 		relpath = os.path.relpath(root, cpuset_root)
@@ -801,8 +859,8 @@ def check_cpuset_v1(cpulist):
 			continue
 
 		Log.print(Log.Status.FAIL, "CPUSET_V1_PARTITION",
-				  f"Path: {root} | cpus: {fmt_cpus(cgroup_cpus)} | sched_load_balance={load_balance}: "
-				  f"nohz_full CPUs {fmt_cpus(left)} are still part of a scheduling domain")
+				  f"Path: {root} | cpus: {to_str_range(cgroup_cpus)} | sched_load_balance={load_balance}: "
+				  f"nohz_full CPUs {to_str_range(left)} are still part of a scheduling domain")
 
 	return covered
 
@@ -859,7 +917,7 @@ def check_isolcpus_cpuset(cpulist):
 		Log.print(Log.Status.FAIL, "NOHZ_FULL_MASK",
 				  "/sys/devices/system/cpu/nohz_full is empty: full dynticks is NOT active")
 	else:
-		Log.print(Log.Status.INFO, "NOHZ_FULL_MASK", f"Effective nohz_full: {fmt_cpus(effective)}")
+		Log.print(Log.Status.INFO, "NOHZ_FULL_MASK", f"Effective nohz_full: {to_str_range(effective)}")
 
 	if requested is None:
 		Log.print(Log.Status.WARN, "NOHZ_FULL_CMDLINE",
@@ -867,11 +925,11 @@ def check_isolcpus_cpuset(cpulist):
 	elif effective and sorted(requested) != sorted(effective):
 		dropped = sorted(set(requested) - set(effective))
 		Log.print(Log.Status.FAIL, "NOHZ_FULL_MISMATCH",
-				  f"cmdline nohz_full={fmt_cpus(requested)} but kernel applied "
-				  f"{fmt_cpus(effective)} | dropped: {fmt_cpus(dropped)}")
+				  f"cmdline nohz_full={to_str_range(requested)} but kernel applied "
+				  f"{to_str_range(effective)} | dropped: {to_str_range(dropped)}")
 
 	isolated = read_cpulist("/sys/devices/system/cpu/isolated")
-	Log.print(Log.Status.INFO, "ISOLATED_MASK", f"/sys/devices/system/cpu/isolated: {fmt_cpus(isolated)}")
+	Log.print(Log.Status.INFO, "ISOLATED_MASK", f"/sys/devices/system/cpu/isolated: {to_str_range(isolated)}")
 
 	if not cpulist:
 		return
@@ -886,7 +944,7 @@ def check_isolcpus_cpuset(cpulist):
 
 	not_online = sorted(set(cpulist) - set(online))
 	if not_online:
-		Log.print(Log.Status.WARN, "NOHZ_FULL_OFFLINE", f"nohz_full CPUs not online: {fmt_cpus(not_online)}")
+		Log.print(Log.Status.WARN, "NOHZ_FULL_OFFLINE", f"nohz_full CPUs not online: {to_str_range(not_online)}")
 
 
 	isolcpus = get_cmdline_param("isolcpus")
@@ -910,12 +968,12 @@ def check_isolcpus_cpuset(cpulist):
 	if isolcpus is None:
 		if not covered:
 			Log.print(Log.Status.FAIL, "CPUSET_MISSING",
-					  f"nohz_full specified {fmt_cpus(cpulist)} but no isolated partitions (isolcpus | cpusets) found!")
+					  f"nohz_full specified {to_str_range(cpulist)} but no isolated partitions (isolcpus | cpusets) found!")
 		elif set(cpulist) - covered:
 			err_nohz_isolated(cpulist, sorted(covered))
 		else:
 			Log.print(Log.Status.OK, "CPUSET_MATCH",
-					  f"every nohz_full CPU ({fmt_cpus(cpulist)}) is in an isolated partition. Ok!")
+					  f"every nohz_full CPU ({to_str_range(cpulist)}) is in an isolated partition. Ok!")
 
 def check_configs(cpulist):
 	if not cpulist:

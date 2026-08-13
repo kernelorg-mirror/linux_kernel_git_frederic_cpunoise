@@ -82,8 +82,6 @@ user_loops = []
 try:
 	for cpu in nohz_full:
 		cgroup = None if cpu in allowed_cpus else find_isolated_partition(cpu)
-		if cgroup is not None:
-			print("CPU %d is owned by the isolated partition %s" % (cpu, cgroup))
 
 		p = subprocess.Popen(["./user_loop"])
 
