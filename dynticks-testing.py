@@ -48,7 +48,7 @@ if not nohz_full:
 	print("nohz_full= not set ?")
 	sys.exit(-1)
 
-print("nohz_full=%s" % to_str_range(nohz_full))
+print()
 
 allowed_cpus = os.sched_getaffinity(0)
 
@@ -99,7 +99,7 @@ try:
 
 		user_loops.append(p)
 
-	print("Enable trace and sleep for %s seconds" % TRACE_DURATION_S)
+	print("\nEnable trace and sleep for %s seconds" % TRACE_DURATION_S)
 
 	# Trace, starting from an empty buffer
 	trace_file_write("tracing_on", "0")
