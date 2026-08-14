@@ -31,10 +31,14 @@ class Log:
 
 	@classmethod
 	def header(cls, title):
+		len_title = len(title)
+		width = HEADER_WIDTH if len_title < HEADER_WIDTH else len_title+4
+
 		color = Log.Status.INFO.value if cls.enable_color else ""
 		reset = Log.Status.RESET.value if cls.enable_color else ""
-		border = "─" * HEADER_WIDTH
+
+		border = "─" * width
 
 		print(f"\n{color}┌{border}┐{reset}")
-		print(f"{color}│{title.center(HEADER_WIDTH)}│{reset}")
+		print(f"{color}│{title.center(width)}│{reset}")
 		print(f"{color}└{border}┘{reset}")
