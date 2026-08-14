@@ -579,16 +579,6 @@ def check_noise_knobs(cpulist):
 	elif numa_balancing == 0:
 		Log.print(Log.Status.OK, "NUMA_BALANCING", "kernel.numa_balancing=0. Ok!")
 
-	# vmstat_update is a recurring deferrable work that keeps the tick alive
-	stat_interval = read_int("/proc/sys/vm/stat_interval")
-	if stat_interval is not None:
-		if stat_interval < STAT_INTERVAL_WARN_S:
-			Log.print(Log.Status.WARN, "VM_STAT_INTERVAL",
-					  f"vm.stat_interval={stat_interval}s: vmstat_update work runs often. "
-					  "A larger value reduces the noise.")
-		else:
-			Log.print(Log.Status.OK, "VM_STAT_INTERVAL", f"vm.stat_interval={stat_interval}s. Ok!")
-
 	check_thp()
 
 def check_mce(cpulist):
