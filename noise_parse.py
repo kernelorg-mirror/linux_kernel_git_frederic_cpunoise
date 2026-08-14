@@ -3,7 +3,7 @@
 import re, sys, statistics , os
 from optparse import OptionParser
 from collections import defaultdict
-from dynticks_testing_lib import parse_cpulist, get_nohz_full_cpus
+from cpunoise_lib import parse_cpulist, get_nohz_full_cpus
 from check_configs import check_configs
 from log_output import Log
 

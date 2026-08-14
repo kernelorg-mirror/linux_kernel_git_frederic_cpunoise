@@ -2,7 +2,7 @@
 
 import os, re, sys, gzip
 from collections import defaultdict
-from dynticks_testing_lib import (parse_cpulist, get_cmdline_param, read_file,
+from cpunoise_lib import (parse_cpulist, get_cmdline_param, read_file,
 								  read_int, read_cpulist, safe_parse_cpulist,
 								  get_nohz_full_cpus,to_str_range)
 from log_output import Log
@@ -160,8 +160,6 @@ def get_thread_siblings_list():
 			continue
 
 		siblings = read_cpulist(f"/sys/devices/system/cpu/{entry}/topology/thread_siblings_list")
-		if not siblings:
-			continue
 
 		seen_cpus.update(siblings)
 		thread_siblings_list[cpu] = siblings
@@ -178,13 +176,16 @@ def check_siblings_thread(cpulist):
 		Log.print(Log.Status.FAIL, "SMT_CHECK", f"Can't find {smt_path}")
 		return
 
-	if smt:
-		Log.print(Log.Status.WARN, "SMT_CHECK", "SMT is enabled. On nohz_full with isolated CPU it should be disabled.")
-	else:
-		Log.print(Log.Status.OK, "SMT_CHECK", "SMT is disabled.")
 	Log.print(Log.Status.INFO, "SMT_NOISE", "Non-isolated cores can cause noise. If both are isolated, they can interfere.")
 
-	siblings_list = get_thread_siblings_list()
+	siblings_list = []
+
+	if smt:
+		Log.print(Log.Status.WARN, "SMT_CHECK", "SMT is enabled. On nohz_full with isolated CPU it should be disabled.")
+		siblings_list = get_thread_siblings_list()
+	else:
+		Log.print(Log.Status.OK, "SMT_CHECK", "SMT is disabled.")
+
 	# none of the siblings should be in cpulist
 	for hw_thread in siblings_list:
 		siblings_nohz_intersect = intersect(siblings_list[hw_thread], cpulist)
@@ -305,12 +306,12 @@ def check_cpu_idle(cpus):
 					  f"Deepest enabled C-state costs {deepest}us to exit: it adds jitter on isolated CPUs")
 
 	# current global PM QoS target: reading it registers no request
-	try:
-		with open("/dev/cpu_dma_latency", "rb") as f:
-			latency = int.from_bytes(f.read(4), sys.byteorder)
-		Log.print(Log.Status.INFO, "CPU_DMA_LATENCY", f"PM QoS cpu_dma_latency target: {latency}us")
-	except (OSError, ValueError):
-		pass
+	#try:
+	#	with open("/dev/cpu_dma_latency", "rb") as f:
+	#		latency = int.from_bytes(f.read(4), sys.byteorder)
+	#	Log.print(Log.Status.INFO, "CPU_DMA_LATENCY", f"PM QoS cpu_dma_latency target: {latency}us")
+	#except (OSError, ValueError):
+	#	pass
 
 def get_irq_name(vec):
 	path = "/proc/irq/%s" % vec

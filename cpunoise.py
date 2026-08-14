@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-from dynticks_testing_lib import (read_file, read_cpulist, find_isolated_partition,
+from cpunoise_lib import (read_file, read_cpulist, find_isolated_partition,
 								  cgroup_attach, to_str_range, get_nohz_full_cpus)
 import os, sys, subprocess, time
 
