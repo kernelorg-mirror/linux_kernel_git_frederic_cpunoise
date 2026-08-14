@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-from dynticks_testing_lib import (read_file, find_isolated_partition,
+from dynticks_testing_lib import (read_file, read_cpulist, find_isolated_partition,
 								  cgroup_attach, to_str_range, get_nohz_full_cpus)
 import os, sys, subprocess, time
 
@@ -52,29 +52,42 @@ print()
 
 allowed_cpus = os.sched_getaffinity(0)
 
+# IRQ must be affined to CPUs. Instead of choose CPU 0, take all the CPUs,
+# remove the nohz_full CPUs and just to be safe, remove also siblings core.
+excluded = set(nohz_full)
+for cpu in nohz_full:
+	excluded.update(read_cpulist("/sys/devices/system/cpu/cpu%d/topology/thread_siblings_list" % cpu))
+
+housekeeping = sorted(set(read_cpulist("/sys/devices/system/cpu/online")) - excluded)
+if not housekeeping:
+	print("No housekeeping CPU left once nohz_full CPUs and their SMT siblings are excluded")
+	sys.exit(-1)
+
+housekeeping_list = to_str_range(housekeeping)
+
 vector_affinity = {}
 irq_reset_ex = []
 
 for vec in os.listdir("/proc/irq"):
-	path = "/proc/irq/%s" % vec
+	irq_dir = "/proc/irq/%s" % vec
 
-	if not os.path.isdir(path) or vec == "0":
+	if not os.path.isdir(irq_dir) or vec == "0":
 		continue
 
-	path = os.path.join(path, "smp_affinity")
-	affinity = read_file(path)
+	affinity_path = os.path.join(irq_dir, "smp_affinity")
+	affinity = read_file(affinity_path)
 	if affinity is None:
 		continue
 
 	try:
-		file_write(path, "1")
+		file_write(os.path.join(irq_dir, "smp_affinity_list"), housekeeping_list)
 		vector_affinity[vec] = affinity
 	except OSError:
 		irq_reset_ex.append(vec)
 		pass
 
 if irq_reset_ex:
-	print("Couldn't reset IRQ %s affinity" % to_str_range(irq_reset_ex))
+	print("Couldn't reset IRQ %s affinity." % to_str_range(irq_reset_ex))
 
 user_loops = []
 
