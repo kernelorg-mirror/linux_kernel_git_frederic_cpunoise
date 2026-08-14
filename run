@@ -7,7 +7,7 @@ nohz_full=$(cat /sys/devices/system/cpu/nohz_full | xargs)
 
 if [[ "$nohz_full" != "(null)" && -n "$nohz_full" ]]
 then
-	./dynticks-testing.py
+	./cpunoise.py
 	./noise_parse.py -c $nohz_full trace
 else
 	echo "ERROR: Make sure 'nohz_full' is set before execute './run'"
