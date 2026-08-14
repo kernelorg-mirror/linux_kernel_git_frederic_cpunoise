@@ -5,6 +5,7 @@ from optparse import OptionParser
 from collections import defaultdict
 from dynticks_testing_lib import parse_cpulist, get_nohz_full_cpus
 from check_configs import check_configs
+from log_output import Log
 
 class Noise:
 	def __init__(self, ts):
@@ -695,6 +696,12 @@ def parse_arguments():
 							 "is only used to parse captured data of another machine"
 	)
 
+	parser.add_option("-C", "--no-color",
+						dest="no_color", action="store_true",default=False,
+						help="Disable colored output, even on a terminal. Output is "
+							 "already plain text when redirected to a file or pipe"
+	)
+
 	(options, args) = parser.parse_args()
 
 	trace_file = None
@@ -756,6 +763,9 @@ TRACE_REG = re.compile("^\\s+(.+?)-([0-9]+)\\s+\\[([0-9]{3})\\].+?([0-9]+.[0-9]{
 nr = 0
 
 (options, trace_file) = parse_arguments()
+
+if options.no_color:
+	Log.enable_color = False
 
 # if --cpulist is not set, read the nohz_full CPUs from sysfs: this covers
 # both nohz_full= and the equivalent isolcpus=nohz,<list> boot parameter
