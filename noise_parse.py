@@ -838,13 +838,13 @@ for t in tasklist_sorted:
 	print(t)
 	total_duration = 0
 	for h in t.hists:
-		print("\t{: <45} Nr:{: >10}".format(*[h.__repr__(), h.nr_noise]), end = "")
+		print("\t{: <50} Nr:{: >10}".format(*[h.__repr__(), h.nr_noise]), end = "")
 		if len(h.duration_list) == 0:
-			print("\tDuration:     Unknown")
+			print("\tDuration (us):     Unknown")
 		else:
 			duration = sum(h.duration_list)
-			print("\tDuration:{: >12}".format(duration))
+			print("\tDuration (us):{: >16}".format(duration))
 			total_duration += duration
 	print()
-	print("\t%s%s" % (" " * 46, "Total: {: >6}".format(t.nr_hists)), end = "")
-	print("\tTotal: {: >14}\n".format(t.noise_duration))
+	print("\t%s%s" % (" " * 51, "Total: {: >6}".format(t.nr_hists)), end = "")
+	print("\tTotal (us): {: >19}\n".format(t.noise_duration))
