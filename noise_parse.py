@@ -835,16 +835,13 @@ for t in tasklist_sorted:
 		continue
 
 	t.hists = sorted(t.hists, key = lambda h : sum(h.duration_list), reverse = True)
-	print(t)
-	total_duration = 0
+
+	print("{:<65} {:>10} {:>17}".format(str(t), "Nr", "Duration (us)"))
+
 	for h in t.hists:
-		print("\t{: <50} Nr:{: >10}".format(*[h.__repr__(), h.nr_noise]), end = "")
-		if len(h.duration_list) == 0:
-			print("\tDuration (us):     Unknown")
-		else:
-			duration = sum(h.duration_list)
-			print("\tDuration (us):{: >16}".format(duration))
-			total_duration += duration
+		duration_str = "Unknown" if len(h.duration_list) == 0 else str(sum(h.duration_list))
+		print("    {:<61} {:>10} {:>17}".format(h.__repr__(), h.nr_noise, duration_str))
+
 	print()
-	print("\t%s%s" % (" " * 51, "Total: {: >6}".format(t.nr_hists)), end = "")
-	print("\tTotal (us): {: >19}\n".format(t.noise_duration))
+	print(" " * 66 + "-" * 28)
+	print("    {:<61} {:>10} {:>17}\n".format("Total", t.nr_hists, t.noise_duration))
