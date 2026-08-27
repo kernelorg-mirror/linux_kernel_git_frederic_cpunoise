@@ -757,7 +757,7 @@ def print_table(title, rows, total_row, name_width=60, nr_width=10, dur_width=15
 	sep = "=" * (name_width + nr_width + dur_width + 2)
 
 	print("\n" + sep)
-	print(title)
+	Log.header(title)
 	print(sep)
 	print("{:<{}} {:>{}} {:>{}}".format("Name", name_width, "Nr", nr_width, "Duration (us)", dur_width))
 
