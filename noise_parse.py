@@ -737,6 +737,38 @@ def cpulist_callback(option, opt, value, parser):
 
 # / CMD-LINE PARSER
 
+def get_hist_category(h):
+	if isinstance(h, CallbackHist):
+		return h.name
+
+	category_map = {
+		TickDepHist: "Tick dependency",
+		SchedHist:   "Sched switch",
+		SoftirqHist: "Softirq"
+	}
+
+	return category_map.get(type(h), h.__repr__())
+
+def task_duration_stats(t):
+	durations = [sum(h.duration_list) for h in t.hists if h.duration_list]
+	return sum(durations), bool(durations)
+
+def print_table(title, rows, total_row, name_width=60, nr_width=10, dur_width=15):
+	sep = "=" * (name_width + nr_width + dur_width + 2)
+
+	print("\n" + sep)
+	Log.header(title)
+	print(sep)
+	print("{:<{}} {:>{}} {:>{}}".format("Name", name_width, "Nr", nr_width, "Duration (us)", dur_width))
+
+	for name, nr, dur_str in rows:
+		print("{:<{}} {:>{},} {:>{}}".format(name, name_width, nr, nr_width, dur_str, dur_width))
+
+	print("-" * (name_width + nr_width + dur_width + 2))
+
+	total_name, total_nr, total_dur = total_row
+	print("{:<{}} {:>{},} {:>{},}\n".format(total_name, name_width, total_nr, nr_width, total_dur, dur_width))
+
 events = [
 	("tick_stop:", tick_stop),
 	("rcu_dyntick:", rcu_dyntick),
@@ -826,6 +858,11 @@ print("Unhandled events: %s" % ",".join(unhandled_events))
 print()
 
 tasklist_sorted = sorted(tasklist, key = lambda t : t.noise_duration, reverse = True)
+category_summary = defaultdict(lambda: {'nr': 0, 'duration': 0, 'has_known_duration': False})
+total_summary_nr = 0
+total_summary_duration = 0
+
+valid_tasks = []
 
 for t in tasklist_sorted:
 	if t.nr_hists == 0:
@@ -834,17 +871,53 @@ for t in tasklist_sorted:
 	if task_matches_filters(t.comm, t.pid, options.exact_tasks, options.pid_tasks) == False:
 		continue
 
+	valid_tasks.append(t)
+
 	t.hists = sorted(t.hists, key = lambda h : sum(h.duration_list), reverse = True)
-	print(t)
-	total_duration = 0
+
+	print("{:<65} {:>10} {:>17}".format(str(t), "Nr", "Duration (us)"))
+
 	for h in t.hists:
-		print("\t{: <45} Nr:{: >10}".format(*[h.__repr__(), h.nr_noise]), end = "")
-		if len(h.duration_list) == 0:
-			print("\tDuration:     Unknown")
-		else:
-			duration = sum(h.duration_list)
-			print("\tDuration:{: >12}".format(duration))
-			total_duration += duration
+		duration_str = "Unknown" if len(h.duration_list) == 0 else str(sum(h.duration_list))
+		print("    {:<61} {:>10} {:>17}".format(h.__repr__(), h.nr_noise, duration_str))
+
+		cat = get_hist_category(h)
+		category_summary[cat]['nr'] += h.nr_noise
+		total_summary_nr += h.nr_noise
+
+		if len(h.duration_list) > 0:
+			dur = sum(h.duration_list)
+			category_summary[cat]['duration'] += dur
+			category_summary[cat]['has_known_duration'] = True
+			total_summary_duration += dur
+
 	print()
-	print("\t%s%s" % (" " * 46, "Total: {: >6}".format(t.nr_hists)), end = "")
-	print("\tTotal: {: >14}\n".format(t.noise_duration))
+	print(" " * 66 + "-" * 28)
+	print("    {:<61} {:>10} {:>17}\n".format("Total", t.nr_hists, t.noise_duration))
+
+# --- Print Summaries ---
+
+task_rows = []
+for t in valid_tasks:
+	task_total_dur, has_known = task_duration_stats(t)
+	migrated_str = " (Migrated!!!)" if len(t.cpus) > 1 else ""
+	task_str = "{} (pid {}, cpus {}){}".format(t.comm, t.pid, str(t.cpus).strip(), migrated_str)
+	dur_str = "{:,}".format(task_total_dur) if has_known else "Unknown"
+	task_rows.append((task_str, t.nr_hists, dur_str, task_total_dur))
+
+task_rows.sort(key=lambda row: row[3], reverse=True)
+task_rows = [row[:3] for row in task_rows]
+
+print_table("=== Summary: Top Tasks by Noise Duration ===", task_rows,
+			("Total", total_summary_nr, total_summary_duration))
+
+# sort categories by duration (descending), fallback to 0 for unknown durations
+sorted_categories = sorted(category_summary.items(), key=lambda item: item[1]['duration'], reverse=True)
+
+category_rows = []
+for cat, stats in sorted_categories:
+	dur_str = "{:,}".format(stats['duration']) if stats['has_known_duration'] else "Unknown"
+	category_rows.append((cat, stats['nr'], dur_str))
+
+print_table("=== Summary: Noise by Category (all isolated CPUs) ===", category_rows,
+			("Total", total_summary_nr, total_summary_duration))
