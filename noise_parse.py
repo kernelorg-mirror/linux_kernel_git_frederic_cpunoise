@@ -1,7 +1,10 @@
 #!/usr/bin/python3
 
-import re, sys, statistics , os
-from optparse import OptionParser
+import re
+import sys
+import statistics
+import os
+import argparse
 from collections import defaultdict
 from cpunoise_lib import parse_cpulist, get_nohz_full_cpus
 from check_configs import check_configs
@@ -106,8 +109,6 @@ class CallbackNoise(Noise):
 	def create_hist(self):
 		return CallbackHist(self, self.func, self.name())
 
-	# type(ne) check first: pop_noise_match_exit() also gets called with a
-	# bare class
 	def match_exit(self, ne):
 		return type(self) is type(ne) and self.func == ne.func
 
@@ -155,7 +156,7 @@ class TickDepHist(Hist):
 		return isinstance(n, TickDepNoise)
 
 	def __repr__(self):
-		return "Tick dep[%s]" % self.dep
+		return f"Tick dep[{self.dep}]"
 
 class IrqWorkHist(Hist):
 	def noise_match(self, n):
@@ -184,7 +185,7 @@ class ReschedVecHist(Hist):
 
 	def __repr__(self):
 		return "Reschedule IPI"
-	
+
 class SchedLatHist(Hist):
 	def __init__(self, n):
 		super().__init__(n)
@@ -216,7 +217,7 @@ class SchedHist(Hist):
 		return isinstance(n, SchedNoise) and n.next_task is self.next_task
 
 	def __repr__(self):
-		return "Sched switch: %s:%d" % (self.next_task.comm, self.next_task.pid)
+		return f"Sched switch: {self.next_task.comm}:{self.next_task.pid}"
 
 class SoftirqHist(Hist):
 	def __init__(self, n, vec):
@@ -227,7 +228,7 @@ class SoftirqHist(Hist):
 		return isinstance(n, SoftirqNoise) and self.vec == n.vec
 
 	def __repr__(self):
-		return "Softirq[%s]" % (self.vec)
+		return f"Softirq[{self.vec}]"
 
 class CallbackHist(Hist):
 	def __init__(self, n, func, name):
@@ -240,7 +241,7 @@ class CallbackHist(Hist):
 		return isinstance(n, self.noise_class) and self.func == n.func
 
 	def __repr__(self):
-		return "%s (func = %s)" % (self.name, self.func)
+		return f"{self.name} (func = {self.func})"
 
 class UnknownHist(Hist):
 	def noise_match(self, n):
@@ -286,9 +287,8 @@ class Task:
 		self.cpus.add(cpu)
 		Task.current[cpu] = self
 		self.pop_noise_match_class(ts, SchedNoise)
-		# if a match exist, the task has been previously preempted
 		self.pop_noise_match_exit(ts, SchedPreemptNoise)
-	
+
 	def add_noise(self, n):
 		self.nr_noise += 1
 		self.add_hist(n)
@@ -298,7 +298,7 @@ class Task:
 		self.noise_stack.append(n)
 
 	def __pop_noise(self, ts):
-		if len(self.noise_stack) == 0:
+		if not self.noise_stack:
 			return
 		n = self.noise_stack.pop()
 		if ts is not None:
@@ -306,10 +306,10 @@ class Task:
 		self.add_noise(n)
 
 	def pop_noise_match_class(self, ts, noise_class):
-		if len(self.noise_stack) == 0:
+		if not self.noise_stack:
 			return
 		if not isinstance(self.noise_stack[-1], noise_class):
-			print("Expected last event was sched_switch on pid %d ts: %d" % (self.pid, ts))
+			print(f"Expected last event was sched_switch on pid {self.pid} ts: {ts}")
 			return
 		self.__pop_noise(ts)
 
@@ -332,45 +332,39 @@ class Task:
 		self.hists.append(n.create_hist())
 
 	def flush_noise_stack(self, ts):
-		# Single event can account their duration here
 		if self.seq_nr_noise > 1:
 			ts = None
-
-		while len(self.noise_stack):
+		while self.noise_stack:
 			self.__pop_noise(ts)
-
 		self.seq_nr_noise = 0
 
 	def kernel_exit(self, ts):
 		if self.ctx == Task.CTX_KERNEL:
 			self.noise_duration += ts - self.kernel_entry_ts
-			# Issue unknown noise if none happened during kernel round-trip
 			if self.seq_nr_noise == 0:
 				n = UnknownNoise(self.kernel_entry_ts)
 				n.complete(ts)
 				self.add_hist(n)
 		elif self.ctx != Task.CTX_UNKNOWN:
-			print("Unexpected kernel exit at %d (lost traces?)" % ts)
+			print(f"Unexpected kernel exit at {ts} (lost traces?)")
 
 		self.ctx = Task.CTX_USER
 		self.flush_noise_stack(ts)
 
-
 	def kernel_enter(self, ts):
-		if self.ctx != Task.CTX_USER and self.ctx != Task.CTX_UNKNOWN:
-			print("Unexpected kernel entry at %d (lost traces?)" % ts)
+		if self.ctx not in (Task.CTX_USER, Task.CTX_UNKNOWN):
+			print(f"Unexpected kernel entry at {ts} (lost traces?)")
 		self.kernel_entry_ts = ts
 		self.ctx = Task.CTX_KERNEL
 
-	def is_akawened(self):
-		return len(self.noise_stack) > 0 and isinstance(self.noise_stack[-1], SchedLatNoise)
+	def is_awakened(self):
+		return bool(self.noise_stack) and isinstance(self.noise_stack[-1], SchedLatNoise)
 
 	def is_preempted(self):
 		return self.curr_state == 'R' and not isinstance(self, IdleTask)
 
 	def __repr__(self):
-		ret = "Task: %s Pid: %d" % (self.comm, self.pid)
-		ret += " cpus: %s" % self.cpus.__repr__().strip()
+		ret = f"Task: {self.comm} Pid: {self.pid} cpus: {str(self.cpus).strip()}"
 		if len(self.cpus) > 1:
 			ret += " (Migrated!!!)"
 		return ret
@@ -378,363 +372,263 @@ class Task:
 class IdleTask(Task):
 	pass
 
-taskdict = { }
-idle_taskdict = { }
+taskdict = {}
+idle_taskdict = {}
 
 def get_task(pid, comm, cpu, state=None):
 	if pid == 0:
 		if cpu in idle_taskdict:
 			return (False, idle_taskdict[cpu])
-		else:
-			t = IdleTask(pid, comm, cpu, state)
-			idle_taskdict[cpu] = t
+		t = IdleTask(pid, comm, cpu, state)
+		idle_taskdict[cpu] = t
 	else:
 		if pid in taskdict:
 			return (False, taskdict[pid])
-		else:
-			t = Task(pid, comm, cpu, state)
-			taskdict[pid] = t
+		t = Task(pid, comm, cpu, state)
+		taskdict[pid] = t
 	return (True, t)
 
+
+# --- Pre-compiled Regular Expressions for Log Parsing ---
+RE_TICK_STOP            = re.compile(r"tick_stop: .+?dependency=(\w+)", re.S)
+RE_RCU_DYNTICK          = re.compile(r"rcu_dyntick: (\S+)", re.S)
+RE_SCHED_WAKEUP_1       = re.compile(r"sched_wakeup:\s+comm=(.+?)\s+pid=([0-9]+)")
+RE_SCHED_WAKEUP_2       = re.compile(r"(?:sched_wakeup:\s+)?(.+?):([0-9]+)\s+\[([0-9]+)\]\s+CPU:([0-9]+)")
+RE_SCHED_SWITCH_1       = re.compile(r"sched_switch:\s+prev_comm=.+? prev_pid=[0-9]+.+?prev_state=(\S+)\s+==> next_comm=(.+?) next_pid=([0-9]+)", re.S)
+RE_SCHED_SWITCH_2       = re.compile(r"sched_switch:\s+.+?:[0-9]+.+?\[.+?\]\s+(\S+)\s+==> (.+?):([0-9]+)", re.S)
+RE_SOFTIRQ_ENTRY        = re.compile(r"softirq_entry:\s+vec=[0-9] \[action=(.+?)\]", re.S)
+RE_SOFTIRQ_EXIT         = re.compile(r"softirq_exit:\s+vec=[0-9] \[action=(.+?)\]", re.S)
+RE_IRQ_WORK_ENTRY       = re.compile(r"irq_work_entry:.+", re.S)
+RE_PAGE_FAULT_USER      = re.compile(r"page_fault_user:.+", re.S)
+RE_RESCHEDULE_ENTRY     = re.compile(r"reschedule_entry:.+", re.S)
+RE_PAGE_FAULT_KERNEL    = re.compile(r"page_fault_kernel:.+", re.S)
+RE_LOCAL_TIMER_ENTRY    = re.compile(r"local_timer_entry:.+", re.S)
+RE_CSD_FUNC_ENTRY       = re.compile(r"csd_function_entry:\s+func=([^,]+),", re.S)
+RE_CSD_FUNC_EXIT        = re.compile(r"csd_function_exit:\s+func=([^,]+),", re.S)
+RE_TIMER_EXPIRE_ENTRY   = re.compile(r"timer_expire_entry: timer=\S+ function=(\S+)", re.S)
+RE_HRTIMER_EXPIRE_ENTRY = re.compile(r"hrtimer_expire_entry: hrtimer=\S+ .*?function=(\S+)", re.S)
+RE_WQ_EXECUTE_START     = re.compile(r"workqueue_execute_start: work struct [^:]+: function (\S+)", re.S)
+RE_WQ_EXECUTE_END       = re.compile(r"workqueue_execute_end: work struct [^:]+: function (\S+)", re.S)
+RE_SYSCALL_ENTER        = re.compile(r"(sys_[^(]+)[(]", re.S)
+RE_SYSCALL_EXIT         = re.compile(r"(sys_[^(]+) ->", re.S)
+RE_UNHANDLED            = re.compile(r"([^: (]+).+", re.S)
+TRACE_REG               = re.compile(r"^\s+(.+?)-([0-9]+)\s+\[([0-9]{3})\].+?([0-9]+.[0-9]{6}):\s+(.+?)$", re.S)
+
+
 def tick_stop(line, task, cpu, ts):
-	# tick_stop: success=1 dependency=NONE
-	s = re.search("tick_stop: .+?dependency=(\\w+)", line, re.S)
+	s = RE_TICK_STOP.search(line)
 	if s is None:
 		print(line)
 		sys.exit(-1)
-		return False
 	dep = s.group(1)
 	if dep != "NONE":
 		n = TickDepNoise(ts, dep)
 		task.push_noise(n)
-
 	return True
 
 def rcu_dyntick(line, task, cpu, ts):
-	s = re.search("rcu_dyntick: (\\S+)", line, re.S)
+	s = RE_RCU_DYNTICK.search(line)
 	if s is None:
 		print(line)
 		sys.exit(-1)
-		return False
 	what = s.group(1)
 	if what in ("Start", "StartIrq"):
 		task.kernel_exit(ts)
 	elif what in ("End", "EndIrq"):
 		task.kernel_enter(ts)
-
 	return True
 
 def sched_wakeup(line, task, cpu, ts):
-	s = re.search(r"sched_wakeup:\s+comm=(.+?)\s+pid=([0-9]+)", line)
+	s = RE_SCHED_WAKEUP_1.search(line)
 	if s is None:
-		s = re.search(r"(?:sched_wakeup:\s+)?(.+?):([0-9]+)\s+\[([0-9]+)\]\s+CPU:([0-9]+)", line)
+		s = RE_SCHED_WAKEUP_2.search(line)
 		if s is None:
 			print(line)
 			sys.exit(-1)
-			return False
 
-	(wake_comm, wake_pid) = (s.group(1), int(s.group(2)))
-	(_, wake_task) = get_task(wake_pid, wake_comm, cpu)
+	wake_comm, wake_pid = s.group(1), int(s.group(2))
+	_, wake_task = get_task(wake_pid, wake_comm, cpu)
 
 	n = SchedLatNoise(wake_task, ts)
 	wake_task.push_noise(n)
 	return True
 
 def sched_switch(line, task, cpu, ts):
-	# trace format
-	# ex: sched_switch: prev_comm=dynticks-testin prev_pid=140026 prev_prio=120 prev_state=S ==> next_comm=swapper/21 next_pid=0 next_prio=120
-	s = re.search(r"sched_switch:\s+prev_comm=.+? prev_pid=[0-9]+.+?prev_state=(\S+)\s+==> next_comm=(.+?) next_pid=([0-9]+)", line, re.S)
+	s = RE_SCHED_SWITCH_1.search(line)
 	if s is None:
-		# trace-cmd format
-		# ex: sched_switch:         swapper/27:0 [120] R ==> kworker/27:1:578 [120]
-		s = re.search(r"sched_switch:\s+.+?:[0-9]+.+?\[.+?\]\s+(\S+)\s+==> (.+?):([0-9]+)", line, re.S)
+		s = RE_SCHED_SWITCH_2.search(line)
 		if s is None:
 			print(line)
 			sys.exit(-1)
-			return False
 
-	(state, next_comm, next_pid) = (s.group(1), s.group(2), int(s.group(3)))
-	(is_new, next_task) = get_task(next_pid, next_comm, cpu, state)
+	state, next_comm, next_pid = s.group(1), s.group(2), int(s.group(3))
+	_, next_task = get_task(next_pid, next_comm, cpu, state)
 
-	# True: the task has been woken up
-	if next_task.is_akawened():
+	if next_task.is_awakened():
 		next_task.pop_noise_match_class(ts, SchedLatNoise)
 
 	task.sched_out(next_task, ts, state)
-
 	return True
 
 def softirq_entry(line, task, cpu, ts):
-	s = re.search("softirq_entry:\\s+vec=[0-9] \\[action=(.+?)\\]", line, re.S)
+	s = RE_SOFTIRQ_ENTRY.search(line)
 	if s is None:
 		print(line)
 		sys.exit(-1)
-		return False
-	vec = s.group(1)
-	n = SoftirqNoise(ts, vec)
+	n = SoftirqNoise(ts, s.group(1))
 	task.push_noise(n)
-
 	return True
 
 def softirq_exit(line, task, cpu, ts):
-	s = re.search("softirq_exit:\\s+vec=[0-9] \\[action=(.+?)\\]", line, re.S)
+	s = RE_SOFTIRQ_EXIT.search(line)
 	if s is None:
 		print(line)
 		sys.exit(-1)
-		return False
-	vec = s.group(1)
-	n = SoftirqNoise(ts, vec)
+	n = SoftirqNoise(ts, s.group(1))
 	task.pop_noise_match_exit(ts, n)
-
 	return True
 
 def irq_work_entry(line, task, cpu, ts):
-	s = re.search("irq_work_entry:.+", line, re.S)
-	if s is None:
+	if not RE_IRQ_WORK_ENTRY.search(line):
 		print(line)
 		sys.exit(-1)
-		return False
-	n = IrqWorkNoise(ts)
-	task.push_noise(n)
-
+	task.push_noise(IrqWorkNoise(ts))
 	return True
 
 def page_fault_user(line, task, cpu, ts):
-	s = re.search("page_fault_user:.+", line, re.S)
-	if s is None:
+	if not RE_PAGE_FAULT_USER.search(line):
 		print(line)
 		sys.exit(-1)
-		return False
-	n = PageFaultNoise(ts)
-	task.push_noise(n)
-
+	task.push_noise(PageFaultNoise(ts))
 	return True
 
 def reschedule_entry(line, task, cpu, ts):
-	s = re.search("reschedule_entry:.+", line, re.S)
-	if s is None:
+	if not RE_RESCHEDULE_ENTRY.search(line):
 		print(line)
 		sys.exit(-1)
-		return False
-	n = ReschedVecNoise(ts)
-	task.push_noise(n)
-
+	task.push_noise(ReschedVecNoise(ts))
 	return True
 
 def page_fault_kernel(line, task, cpu, ts):
-	s = re.search("page_fault_kernel:.+", line, re.S)
-	if s is None:
+	if not RE_PAGE_FAULT_KERNEL.search(line):
 		print(line)
 		sys.exit(-1)
-		return False
-	n = PageFaultNoise(ts)
-	task.push_noise(n)
-	
+	task.push_noise(PageFaultNoise(ts))
 	return True
 
 def local_timer_entry(line, task, cpu, ts):
-	s = re.search("local_timer_entry:.+", line, re.S)
-	if s is None:
+	if not RE_LOCAL_TIMER_ENTRY.search(line):
 		print(line)
 		sys.exit(-1)
-		return False
-	n = LocalTimerNoise(ts)
-	task.push_noise(n)
-
+	task.push_noise(LocalTimerNoise(ts))
 	return True
 
 def csd_function_entry(line, task, cpu, ts):
-	s = re.search("csd_function_entry:\\s+func=([^,]+),", line, re.S)
+	s = RE_CSD_FUNC_ENTRY.search(line)
 	if s is None:
 		print(line)
 		sys.exit(-1)
-		return False
-	func = s.group(1)
-	n = CsdNoise(ts, func)
-	task.push_noise(n)
-
+	task.push_noise(CsdNoise(ts, s.group(1)))
 	return True
 
 def csd_function_exit(line, task, cpu, ts):
-	s = re.search("csd_function_exit:\\s+func=([^,]+),", line, re.S)
+	s = RE_CSD_FUNC_EXIT.search(line)
 	if s is None:
 		print(line)
 		sys.exit(-1)
-		return False
-	func = s.group(1)
-	n = CsdNoise(ts, func)
-	task.pop_noise_match_exit(ts, n)
-	
+	task.pop_noise_match_exit(ts, CsdNoise(ts, s.group(1)))
 	return True
 
 def timer_expire_entry(line, task, cpu, ts):
-	s = re.search("timer_expire_entry: timer=\\S+ function=(\\S+)", line, re.S)
+	s = RE_TIMER_EXPIRE_ENTRY.search(line)
 	if s is None:
 		print(line)
 		sys.exit(-1)
-		return False
-	timer = s.group(1)
-	n = TimerNoise(ts, timer)
-	task.push_noise(n)
-
+	task.push_noise(TimerNoise(ts, s.group(1)))
 	return True
 
 def hrtimer_expire_entry(line, task, cpu, ts):
-	# trace format:
-	# hrtimer_expire_entry: hrtimer=0xff41d0a32a1c7db8 now=7260211852499 function=hrtimer_wakeup/0x0
-	# trace-cmd format:
-	# hrtimer_expire_entry: hrtimer=00000000fd65e54e function=tick_nohz_handler now=340292315972110
-	s = re.search("hrtimer_expire_entry: hrtimer=\\S+ .*?function=(\\S+)", line, re.S)
+	s = RE_HRTIMER_EXPIRE_ENTRY.search(line)
 	if s is None:
 		print(line)
 		sys.exit(-1)
-		return False
-	timer = s.group(1)
-	n = TimerNoise(ts, timer)
-	task.push_noise(n)
-
+	task.push_noise(TimerNoise(ts, s.group(1)))
 	return True
 
 def workqueue_execute_start(line, task, cpu, ts):
-	s = re.search("workqueue_execute_start: work struct [^:]+: function (\\S+)", line, re.S)
+	s = RE_WQ_EXECUTE_START.search(line)
 	if s is None:
 		print(line)
 		sys.exit(-1)
-		return False
-	work = s.group(1)
-	n = WorkqueueNoise(ts, work)
-	task.push_noise(n)
-
+	task.push_noise(WorkqueueNoise(ts, s.group(1)))
 	return True
 
 def workqueue_execute_end(line, task, cpu, ts):
-	s = re.search("workqueue_execute_end: work struct [^:]+: function (\\S+)", line, re.S)
+	s = RE_WQ_EXECUTE_END.search(line)
 	if s is None:
 		print(line)
 		sys.exit(-1)
-		return False
-	work = s.group(1)
-	n = WorkqueueNoise(ts, work)
-	task.pop_noise_match_exit(ts, n)
-
+	task.pop_noise_match_exit(ts, WorkqueueNoise(ts, s.group(1)))
 	return True
 
 def syscall_enter(line, task, cpu, ts):
-	s = re.search("(sys_[^(]+)[(]", line, re.S)
+	s = RE_SYSCALL_ENTER.search(line)
 	if s is None:
 		return False
-	name = s.group(1)
-	n = SyscallNoise(ts, name)
-	task.push_noise(n)
+	task.push_noise(SyscallNoise(ts, s.group(1)))
 	return True
 
 def syscall_exit(line, task, cpu, ts):
-	s = re.search("(sys_[^(]+) ->", line, re.S)
+	s = RE_SYSCALL_EXIT.search(line)
 	if s is None:
 		return False
-	name = s.group(1)
-	n = SyscallNoise(ts, name)
-	task.pop_noise_match_exit(ts, n)
-
+	task.pop_noise_match_exit(ts, SyscallNoise(ts, s.group(1)))
 	return True
 
 def syscall(line, task, cpu, ts):
-	if syscall_enter(line, task, cpu, ts):
-		return True
-	elif syscall_exit(line, task, cpu, ts):
-		return True
-	else:
-		return False
+	return syscall_enter(line, task, cpu, ts) or syscall_exit(line, task, cpu, ts)
 
 unhandled_events = set()
 
 def unhandled_event(line, task, cpu, ts):
-	s = re.match("([^: (]+).+", line, re.S)
+	s = RE_UNHANDLED.match(line)
 	if s is None:
-		print("Unhandled event parsing issue: %s" % line)
+		print(f"Unhandled event parsing issue: {line}")
 		sys.exit(-1)
 	unhandled_events.add(s.group(1))
-
 	return True
 
-# CMD-LINE PARSER
+# --- CMD-LINE PARSER ---
 def parse_arguments():
-	parser = OptionParser(usage="usage: %prog [options] trace_file")
+	parser = argparse.ArgumentParser(description="Monitor sources of interference on isolated CPUs")
 
-	parser.add_option("-t", "--task",
-						dest="exact_tasks",
-						action="append",
-						default=[],
-						help="Tasks pattern to filter (can be specified multiple times"
-							"It matches any tasks that starts with the specified pattern"
-	)
+	parser.add_argument("-t", "--task", dest="exact_tasks", action="append", default=[],
+						help="Tasks pattern to filter (can be specified multiple times). Matches any tasks that starts with the specified pattern")
+	parser.add_argument("-p", "--pid-task", dest="pid_tasks", action="append", default=[],
+						help="Match PID of the task")
+	parser.add_argument("-c", "--cpulist", dest="cpulist_raw", type=str,
+						help="List of nohz_full CPUs (ex: 2-11,13-18)")
+	parser.add_argument("-o", "--check-config-only", dest="only_configs", action="store_true", default=False,
+						help="Run a configuration check only. If a trace file is present, it will be ignored")
+	parser.add_argument("-s", "--skip-configs", dest="skip_config", action="store_true", default=False,
+						help="Skip the configuration check. Useful if noise_parser is only used to parse captured data of another machine")
+	parser.add_argument("-C", "--no-color", dest="no_color", action="store_true", default=False,
+						help="Disable colored output, even on a terminal. Output is already plain text when redirected to a file or pipe")
+	parser.add_argument("trace_file", nargs='?', help="Trace file to parse")
 
-	parser.add_option("-p", "--pid-task",
-						dest="pid_tasks",
-						action="append",
-						help="Match PID of the task",
-						default=[]
-	)
-
-	parser.add_option("-c", "--cpulist",
-						action="callback",
-						callback=cpulist_callback,
-						type="string", nargs=1, dest="cpulist_raw",
-						help="List of nohz_full CPUs (ex: 2-11,13-18)"
-	)
-
-	parser.add_option("-o", "--check-config-only",
-						dest="only_configs", action="store_true",default=False,
-						help="Run a configuration check only. "
-							 "If a trace file is present, it will be ignored"
-	)
-
-	parser.add_option("-s", "--skip-configs",
-						dest="skip_config", action="store_true",default=False,
-						help="Skip the configuration check. Useful if noise_parser "
-							 "is only used to parse captured data of another machine"
-	)
-
-	parser.add_option("-C", "--no-color",
-						dest="no_color", action="store_true",default=False,
-						help="Disable colored output, even on a terminal. Output is "
-							 "already plain text when redirected to a file or pipe"
-	)
-
-	(options, args) = parser.parse_args()
-
-	trace_file = None
-	if len(args) == 1:
-		trace_file = args[0]
-
-	return options, trace_file
+	return parser.parse_args()
 
 def task_matches_filters(task_name, task_pid, exact_tasks=None, pid_tasks=None):
 	exact_tasks = exact_tasks or []
 	pid_tasks = pid_tasks or []
 
-	# No flags provided
 	if not exact_tasks and not pid_tasks:
 		return True
-
-	# -t flag: match exact task name
 	if task_name in exact_tasks:
 		return True
-
-	# -p flag: match the PID
 	if str(task_pid) in pid_tasks:
 		return True
-
 	return False
-
-cpulist = None
-skip_config = False
-
-def cpulist_callback(option, opt, value, parser):
-	global cpulist
-	cpulist = parse_cpulist(value)
-
-# / CMD-LINE PARSER
 
 def get_hist_category(h):
 	if isinstance(h, CallbackHist):
@@ -745,8 +639,7 @@ def get_hist_category(h):
 		SchedHist:   "Sched switch",
 		SoftirqHist: "Softirq"
 	}
-
-	return category_map.get(type(h), h.__repr__())
+	return category_map.get(type(h), str(h))
 
 def task_duration_stats(t):
 	durations = [sum(h.duration_list) for h in t.hists if h.duration_list]
@@ -758,15 +651,16 @@ def print_table(title, rows, total_row, name_width=60, nr_width=10, dur_width=15
 	print("\n" + sep)
 	Log.header(title)
 	print(sep)
-	print("{:<{}} {:>{}} {:>{}}".format("Name", name_width, "Nr", nr_width, "Duration (us)", dur_width))
+	print(f"{'Name':<{name_width}} {'Nr':>{nr_width}} {'Duration (us)':>{dur_width}}")
 
 	for name, nr, dur_str in rows:
-		print("{:<{}} {:>{},} {:>{}}".format(name, name_width, nr, nr_width, dur_str, dur_width))
+		print(f"{name:<{name_width}} {nr:>{nr_width},} {dur_str:>{dur_width}}")
 
 	print("-" * (name_width + nr_width + dur_width + 2))
 
 	total_name, total_nr, total_dur = total_row
-	print("{:<{}} {:>{},} {:>{},}\n".format(total_name, name_width, total_nr, nr_width, total_dur, dur_width))
+	print(f"{total_name:<{name_width}} {total_nr:>{nr_width},} {total_dur:>{dur_width},}\n")
+
 
 events = [
 	("tick_stop:", tick_stop),
@@ -790,133 +684,127 @@ events = [
 	("", unhandled_event), # must be last!
 ]
 
-TRACE_REG = re.compile("^\\s+(.+?)-([0-9]+)\\s+\\[([0-9]{3})\\].+?([0-9]+.[0-9]{6}):\\s+(.+?)$", re.S)
-nr = 0
+if __name__ == "__main__":
+	args = parse_arguments()
 
-(options, trace_file) = parse_arguments()
+	if args.no_color:
+		Log.enable_color = False
 
-if options.no_color:
-	Log.enable_color = False
+	cpulist = parse_cpulist(args.cpulist_raw) if args.cpulist_raw else None
 
-# if --cpulist is not set, read the nohz_full CPUs from sysfs: this covers
-# both nohz_full= and the equivalent isolcpus=nohz,<list> boot parameter
-if cpulist is None:
-	print("INFO: --cpulist param. not set: reading nohz_full from sysfs")
-	cpulist = get_nohz_full_cpus()
+	if cpulist is None:
+		print("INFO: --cpulist param. not set: reading nohz_full from sysfs")
+		cpulist = get_nohz_full_cpus()
 
-if options.skip_config is False:
-	check_configs(cpulist)
+	if not args.skip_config:
+		check_configs(cpulist)
 
-if options.only_configs:
-	exit(0)
+	if args.only_configs:
+		sys.exit(0)
 
-if trace_file == None or os.path.exists(trace_file) is False:
-	print("File '%s' not found.\n" % trace_file)
-	exit(0)
+	if not args.trace_file or not os.path.exists(args.trace_file):
+		print(f"File '{args.trace_file}' not found.\n")
+		sys.exit(0)
 
-Log.header("Monitoring sources of interference on isolated cpus")
+	Log.header("Monitoring sources of interference on isolated cpus")
 
-f = open(trace_file)
-fsize = os.path.getsize(trace_file)
-cursor = 0
+	fsize = os.path.getsize(args.trace_file)
+	cursor = 0
+	nr = 0
 
-while True:
-	line = f.readline()
-	if not line:
-		break
-	cursor += float(len(line))
-	sys.stderr.write("Processing %f%%\r" % (cursor / fsize * 100))
-	nr += 1
-	s = TRACE_REG.match(line)
-	if s is not None:
-		comm = s.group(1)
-		pid =  int(s.group(2))
-		cpu = int(s.group(3))
-		raw_ts = s.group(4).split(".")
-		ts = (int(raw_ts[0]) * (10**6)) + int(raw_ts[1])
-		rest = s.group(5)
+	with open(args.trace_file, 'r') as f:
+		for line in f:
+			cursor += len(line)
+			if nr % 1000 == 0:  # Throttle stderr writes for performance
+				sys.stderr.write(f"Processing {cursor / fsize * 100:.2f}%\r")
+			nr += 1
 
-		if cpulist is not None and cpu not in cpulist:
+			s = TRACE_REG.match(line)
+			if s is not None:
+				comm = s.group(1)
+				pid = int(s.group(2))
+				cpu = int(s.group(3))
+				raw_ts = s.group(4).split(".")
+				ts = (int(raw_ts[0]) * (10**6)) + int(raw_ts[1])
+				rest = s.group(5)
+
+				if cpulist is not None and cpu not in cpulist:
+					continue
+
+				is_new, task = get_task(pid, comm, cpu)
+				if is_new:
+					task.sched_in(0, cpu)
+
+				for prefix, handler in events:
+					if rest.startswith(prefix):
+						if handler(rest, task, cpu, ts):
+							break
+
+	tasklist = list(taskdict.values())
+
+	for t in tasklist:
+		t.flush_noise_stack(None)
+
+	print(f"\nUnhandled events: {','.join(unhandled_events)}\n")
+
+	tasklist_sorted = sorted(tasklist, key=lambda t: t.noise_duration, reverse=True)
+	category_summary = defaultdict(lambda: {'nr': 0, 'duration': 0, 'has_known_duration': False})
+	total_summary_nr = 0
+	total_summary_duration = 0
+
+	valid_tasks = []
+
+	for t in tasklist_sorted:
+		if t.nr_hists == 0:
 			continue
 
-		(is_new, task) = get_task(pid, comm, cpu)
-		if is_new:
-			task.sched_in(0, cpu)
+		if not task_matches_filters(t.comm, t.pid, args.exact_tasks, args.pid_tasks):
+			continue
 
-		for e in events:
-			if rest.startswith(e[0]):
-				if e[1](rest, task, cpu, ts):
-					break
+		valid_tasks.append(t)
+		t.hists = sorted(t.hists, key=lambda h: sum(h.duration_list), reverse=True)
 
-tasklist = [i[1] for i in taskdict.items()]
+		print(f"{str(t):<65} {'Nr':>10} {'Duration (us)':>17}")
 
-for t in tasklist:
-	t.flush_noise_stack(None)
+		for h in t.hists:
+			duration_str = "Unknown" if not h.duration_list else str(sum(h.duration_list))
+			print(f"    {str(h):<61} {h.nr_noise:>10} {duration_str:>17}")
 
-print("Unhandled events: %s" % ",".join(unhandled_events))
-print()
+			cat = get_hist_category(h)
+			category_summary[cat]['nr'] += h.nr_noise
+			total_summary_nr += h.nr_noise
 
-tasklist_sorted = sorted(tasklist, key = lambda t : t.noise_duration, reverse = True)
-category_summary = defaultdict(lambda: {'nr': 0, 'duration': 0, 'has_known_duration': False})
-total_summary_nr = 0
-total_summary_duration = 0
+			if h.duration_list:
+				dur = sum(h.duration_list)
+				category_summary[cat]['duration'] += dur
+				category_summary[cat]['has_known_duration'] = True
+				total_summary_duration += dur
 
-valid_tasks = []
+		print("\n" + " " * 66 + "-" * 28)
+		print(f"    {'Total':<61} {t.nr_hists:>10} {t.noise_duration:>17}\n")
 
-for t in tasklist_sorted:
-	if t.nr_hists == 0:
-		continue
-		
-	if task_matches_filters(t.comm, t.pid, options.exact_tasks, options.pid_tasks) == False:
-		continue
+	# --- Print Summaries ---
 
-	valid_tasks.append(t)
+	task_rows = []
+	for t in valid_tasks:
+		task_total_dur, has_known = task_duration_stats(t)
+		migrated_str = " (Migrated!!!)" if len(t.cpus) > 1 else ""
+		task_str = f"{t.comm} (pid {t.pid}, cpus {str(t.cpus).strip()}){migrated_str}"
+		dur_str = f"{task_total_dur:,}" if has_known else "Unknown"
+		task_rows.append((task_str, t.nr_hists, dur_str, task_total_dur))
 
-	t.hists = sorted(t.hists, key = lambda h : sum(h.duration_list), reverse = True)
+	task_rows.sort(key=lambda row: row[3], reverse=True)
+	task_rows = [row[:3] for row in task_rows]
 
-	print("{:<65} {:>10} {:>17}".format(str(t), "Nr", "Duration (us)"))
+	print_table("=== Summary: Top Tasks by Noise Duration ===", task_rows,
+				("Total", total_summary_nr, total_summary_duration))
 
-	for h in t.hists:
-		duration_str = "Unknown" if len(h.duration_list) == 0 else str(sum(h.duration_list))
-		print("    {:<61} {:>10} {:>17}".format(h.__repr__(), h.nr_noise, duration_str))
+	sorted_categories = sorted(category_summary.items(), key=lambda item: item[1]['duration'], reverse=True)
 
-		cat = get_hist_category(h)
-		category_summary[cat]['nr'] += h.nr_noise
-		total_summary_nr += h.nr_noise
+	category_rows = []
+	for cat, stats in sorted_categories:
+		dur_str = f"{stats['duration']:,}" if stats['has_known_duration'] else "Unknown"
+		category_rows.append((cat, stats['nr'], dur_str))
 
-		if len(h.duration_list) > 0:
-			dur = sum(h.duration_list)
-			category_summary[cat]['duration'] += dur
-			category_summary[cat]['has_known_duration'] = True
-			total_summary_duration += dur
-
-	print()
-	print(" " * 66 + "-" * 28)
-	print("    {:<61} {:>10} {:>17}\n".format("Total", t.nr_hists, t.noise_duration))
-
-# --- Print Summaries ---
-
-task_rows = []
-for t in valid_tasks:
-	task_total_dur, has_known = task_duration_stats(t)
-	migrated_str = " (Migrated!!!)" if len(t.cpus) > 1 else ""
-	task_str = "{} (pid {}, cpus {}){}".format(t.comm, t.pid, str(t.cpus).strip(), migrated_str)
-	dur_str = "{:,}".format(task_total_dur) if has_known else "Unknown"
-	task_rows.append((task_str, t.nr_hists, dur_str, task_total_dur))
-
-task_rows.sort(key=lambda row: row[3], reverse=True)
-task_rows = [row[:3] for row in task_rows]
-
-print_table("=== Summary: Top Tasks by Noise Duration ===", task_rows,
-			("Total", total_summary_nr, total_summary_duration))
-
-# sort categories by duration (descending), fallback to 0 for unknown durations
-sorted_categories = sorted(category_summary.items(), key=lambda item: item[1]['duration'], reverse=True)
-
-category_rows = []
-for cat, stats in sorted_categories:
-	dur_str = "{:,}".format(stats['duration']) if stats['has_known_duration'] else "Unknown"
-	category_rows.append((cat, stats['nr'], dur_str))
-
-print_table("=== Summary: Noise by Category (all isolated CPUs) ===", category_rows,
-			("Total", total_summary_nr, total_summary_duration))
+	print_table("=== Summary: Noise by Category (all isolated CPUs) ===", category_rows,
+				("Total", total_summary_nr, total_summary_duration))
