@@ -9,7 +9,7 @@ TRACING_PATH = "/sys/kernel/tracing"
 # how long the user loops are left spinning while the trace is collected
 TRACE_DURATION_S = 10
 
-EVENTS = ["sched/sched_switch", "irq", "workqueue/workqueue_execute_start",
+EVENTS = ["sched/sched_switch", "sched/sched_wakeup", "irq", "workqueue/workqueue_execute_start",
 		  "timer/hrtimer_expire_entry", "timer/timer_expire_entry",
 		  "timer/tick_stop", "irq_vectors", "workqueue/workqueue_execute_end"]
 
