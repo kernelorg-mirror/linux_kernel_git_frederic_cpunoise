@@ -1,0 +1,18 @@
+Make sure CPU 1 is full dynticks (it must be in the `nohz_full=` boot parameter
+cpu mask).
+
+To run:
+```
+$ ./run
+```
+
+Look at the resulting trace in trace.1
+hrtimer events should report you the tick events (unless you haven't
+`CONFIG_HIGH_RES_TIMERS=y`) and `tick_stop` events tell you what's going on with full dynticks
+behaviour.
+
+trace.1.example shows an example of a successful full dynticks behaviour. The
+tick got mostly stopped during the execution of the user loop.
+
+> [!note]
+> If you still experience issue, you can take a look to one of the [utilities](./utilities).
