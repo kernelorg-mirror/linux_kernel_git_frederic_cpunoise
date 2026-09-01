@@ -106,12 +106,14 @@ class CallbackNoise(Noise):
 	def create_hist(self):
 		return CallbackHist(self, self.func, self.name())
 
+	# type(ne) check first: pop_noise_match_exit() also gets called with a
+	# bare class
+	def match_exit(self, ne):
+		return type(self) is type(ne) and self.func == ne.func
+
 class CsdNoise(CallbackNoise):
 	def name(self):
 		return "CSD (IPI)"
-
-	def match_exit(self, ne):
-		return self.func == ne.func
 
 class TimerNoise(CallbackNoise):
 	def name(self):
@@ -121,15 +123,9 @@ class WorkqueueNoise(CallbackNoise):
 	def name(self):
 		return "Workqueue"
 
-	def match_exit(self, ne):
-		return self.func == ne.func
-
 class SyscallNoise(CallbackNoise):
 	def name(self):
 		return "Syscall"
-
-	def match_exit(self, ne):
-		return self.func == ne.func
 
 class UnknownNoise(Noise):
 	def create_hist(self):
@@ -429,11 +425,14 @@ def rcu_dyntick(line, task, cpu, ts):
 	return True
 
 def sched_wakeup(line, task, cpu, ts):
-	s = re.search("(?:sched_wakeup:\\s+)?(.+?):([0-9]+)\\s+\\[([0-9]+)\\]\\s+CPU:([0-9]+)", line, re.S)
+	s = re.search(r"sched_wakeup:\s+comm=(.+?)\s+pid=([0-9]+)", line)
 	if s is None:
-		print(line)
-		sys.exit(-1)
-		return False
+		s = re.search(r"(?:sched_wakeup:\s+)?(.+?):([0-9]+)\s+\[([0-9]+)\]\s+CPU:([0-9]+)", line)
+		if s is None:
+			print(line)
+			sys.exit(-1)
+			return False
+
 	(wake_comm, wake_pid) = (s.group(1), int(s.group(2)))
 	(_, wake_task) = get_task(wake_pid, wake_comm, cpu)
 
@@ -444,11 +443,11 @@ def sched_wakeup(line, task, cpu, ts):
 def sched_switch(line, task, cpu, ts):
 	# trace format
 	# ex: sched_switch: prev_comm=dynticks-testin prev_pid=140026 prev_prio=120 prev_state=S ==> next_comm=swapper/21 next_pid=0 next_prio=120
-	s = re.search("sched_switch:\\s+prev_comm=.+? prev_pid=[0-9]+.+?prev_state=(\\w)\\s+==> next_comm=(.+?) next_pid=([0-9]+)", line, re.S)
+	s = re.search(r"sched_switch:\s+prev_comm=.+? prev_pid=[0-9]+.+?prev_state=(\S+)\s+==> next_comm=(.+?) next_pid=([0-9]+)", line, re.S)
 	if s is None:
 		# trace-cmd format
 		# ex: sched_switch:         swapper/27:0 [120] R ==> kworker/27:1:578 [120]
-		s = re.search("sched_switch:\\s+.+?:[0-9]+.+?\\[.+?\\]\\s+([A-Z])\\s+==> (.+?):([0-9]+)", line, re.S)
+		s = re.search(r"sched_switch:\s+.+?:[0-9]+.+?\[.+?\]\s+(\S+)\s+==> (.+?):([0-9]+)", line, re.S)
 		if s is None:
 			print(line)
 			sys.exit(-1)
