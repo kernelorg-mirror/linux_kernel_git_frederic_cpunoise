@@ -1,7 +1,7 @@
 # Utilities
 > [!note]
 >[drgn](https://drgn.readthedocs.io/en/latest/) is a debugger that can be used both on live systems and vmcore. Debugging symbols for the target kernel are needed (in SUSE the package is actually named `kernel-default-debuginfo`).
-These are some utilities that may help investigate some specific aspects. 
+These are some utilities that may help investigate some specific aspects.
 
 [[_TOC_]]
 
@@ -10,7 +10,7 @@ If IRQs are still present on Isolated CPU(s) you can use `dump_irq.py`. This is 
 
 This is an example (the output is partial, isolated CPUs = 5,7,12):
 ```
-somehost:~/drgn-scripts # ./dump_irq.py 
+somehost:~/drgn-scripts # ./dump_irq.py
 === Global IRQ Vector Matrix Stats ===
   Matrix Bits      : 256
   Vectors per CPU  : 204 (Usable limit)
@@ -19,14 +19,14 @@ somehost:~/drgn-scripts # ./dump_irq.py
   Total Allocated  : 1261
 
 === CPU Vector Occupancy ===
-CPU   | ROLE         | ALLOCATED  | AVAILABLE  | MANAGED   
+CPU   | ROLE         | ALLOCATED  | AVAILABLE  | MANAGED  
 ---------------------------------------------------------
-0     | Housekeeping | 13         | 187        | 1         
-1     | Housekeeping | 7          | 193        | 1         
-...       
-10    | Housekeeping | 8          | 192        | 1         
-11    | Housekeeping | 7          | 193        | 1         
-12    | Isolated     | 6          | 195        | 0  
+0     | Housekeeping | 13         | 187        | 1
+1     | Housekeeping | 7          | 193        | 1
+...
+10    | Housekeeping | 8          | 192        | 1
+11    | Housekeeping | 7          | 193        | 1
+12    | Isolated     | 6          | 195        | 0
 
 === IRQs effectively targeting isolated CPUs ===
 CPU   | IRQ    | NAME

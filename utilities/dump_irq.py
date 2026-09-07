@@ -18,11 +18,11 @@ E.g.
   Total Allocated  : 1261
 
 === CPU Vector Occupancy ===
-CPU   | ROLE         | ALLOCATED  | AVAILABLE  | MANAGED   
----------------------------------------------------------
-5     | Isolated     | 0          | 201        | 0         
-7     | Isolated     | 0          | 201        | 0         
-12    | Isolated     | 8          | 193        | 0         
+CPU   | ROLE         | ALLOCATED  | AVAILABLE  | MANAGED
+------------------------------------------------------
+5     | Isolated     | 0          | 201        | 0
+7     | Isolated     | 0          | 201        | 0
+12    | Isolated     | 8          | 193        | 0
 
 === IRQs effectively targeting isolated CPUs ===
 CPU   | IRQ    | NAME
@@ -109,7 +109,7 @@ def irq_name(desc):
     names = irq_desc_action_names(desc)
     if names:
         return ", ".join(names)
-    
+
     if desc.name:
         return desc.name.string_().decode('utf-8', 'ignore')
     return "(none)"
@@ -199,7 +199,6 @@ def print_isolated_irqs(isolated_cpus):
         print("(none)")
     print()
 
-
 def dump_irq_matrix(args):
     try:
         vm = prog["vector_matrix"][0]
@@ -211,26 +210,26 @@ def dump_irq_matrix(args):
 
     online_cpus = get_online_cpus()
     isolated_cpus = get_isolated_cpus()
-    
+
     # Filter target CPUs based on CLI flags
     target_cpus = [
-        cpu for cpu in online_cpus 
-        if not (cpu in isolated_cpus and args.ignore_isolated) and 
+        cpu for cpu in online_cpus
+        if not (cpu in isolated_cpus and args.ignore_isolated) and
            not (cpu not in isolated_cpus and args.ignore_housekeeping)
     ]
 
     print("=== CPU Vector Occupancy ===")
     print(f"{'CPU':<5} | {'ROLE':<12} | {'ALLOCATED':<10} | {'AVAILABLE':<10} | {'MANAGED':<10}")
     print("-" * 57)
-    
+
     for cpu in target_cpus:
         role = "Isolated" if cpu in isolated_cpus else "Housekeeping"
-        
+
         try:
             cmap = per_cpu_ptr(vm.maps, cpu)[0]
         except (drgn.FaultError, TypeError):
             continue
-        
+
         if get_val(cmap, 'online', default=1) == 0:
             continue
 
@@ -245,11 +244,10 @@ def dump_irq_matrix(args):
     if not args.ignore_isolated:
         print_isolated_irqs(isolated_cpus)
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Dump x86 IRQ Vector Matrix Occupancy & Names")
     parser.add_argument("--ignore-housekeeping", action="store_true", help="Hide Housekeeping CPUs from output")
     parser.add_argument("--ignore-isolated", action="store_true", help="Hide Isolated CPUs from output")
     args = parser.parse_args()
-    
+
     dump_irq_matrix(args)
