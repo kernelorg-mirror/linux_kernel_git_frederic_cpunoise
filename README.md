@@ -15,3 +15,11 @@ tick got mostly stopped during the execution of the user loop.
 
 > [!note]
 > If you still experience issue, you can take a look to one of the [utilities](./utilities).
+
+## Authors & Copyright
+
+* Copyright (C) 2013-2026 Frederic Weisbecker
+* Copyright (C) 2024-2026 Marco Crivellari
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version. See the [LICENSE](LICENSE) file for details.

@@ -1,4 +1,8 @@
 #!/usr/bin/python3
+#
+# Copyright (C) 2013-2026 Frederic Weisbecker
+# Copyright (C) 2024-2026 Marco Crivellari
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 from cpunoise_lib import (read_file, read_cpulist, find_isolated_partition,
 								  cgroup_attach, to_str_range, get_nohz_full_cpus)
